@@ -1,5 +1,7 @@
-import copy,http.cookiejar,json,sqlite3,tempfile,threading,unittest,urllib.request,urllib.error,subprocess,sys
+import copy,http.cookiejar,json,os,sqlite3,tempfile,threading,unittest,urllib.request,urllib.error,subprocess,sys
 from pathlib import Path
+from http.cookiejar import CookieJar
+from unittest import mock
 from server_test import server,seed,bootstrap,change
 from guest_access import GuestAccess,Denied,digest
 class GuestAccessTests(unittest.TestCase):
@@ -74,4 +76,22 @@ class GuestAccessTests(unittest.TestCase):
    with self.assertRaises(urllib.error.HTTPError) as e:request('/api/invite/media/portrait-1.jpg')
    self.assertEqual(e.exception.code,401);e.exception.close()
   finally:http.shutdown();http.server_close();t.join()
+ def test_private_media_upload_requires_admin_and_guest_session(self):
+  token='a'*40;http=server.ThreadingHTTPServer(('127.0.0.1',0),server.make_handler(self.db,token,{'127.0.0.1'}));thread=threading.Thread(target=http.serve_forever,daemon=True);thread.start();url=f'http://127.0.0.1:{http.server_port}';media=b'\xff\xd8\xff'+b'0'*12+b'\xff\xd9'
+  target=Path(self.temp.name)/'private-media'
+  try:
+   with mock.patch.dict(os.environ,{'TEMU_PRIVATE_MEDIA_DIR':str(target)}):
+    req=urllib.request.Request(url+'/api/admin/media/portrait-1.jpg',data=media,headers={'X-Temu-Media':'1'},method='PUT')
+    with self.assertRaises(urllib.error.HTTPError) as error:urllib.request.urlopen(req)
+    self.assertEqual(error.exception.code,401);error.exception.close();self.assertFalse(target.exists())
+    req.add_header('Authorization','Bearer '+token)
+    with urllib.request.urlopen(req) as response:self.assertEqual(json.load(response)['bytes'],len(media))
+    self.assertEqual((target/'portrait-1.jpg').read_bytes(),media)
+    with self.assertRaises(urllib.error.HTTPError) as error:urllib.request.urlopen(url+'/api/invite/media/portrait-1.jpg')
+    self.assertEqual(error.exception.code,401);error.exception.close()
+    issued=self.issue();opener=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(CookieJar()))
+    unlock=urllib.request.Request(url+'/api/invite/unlock',data=json.dumps({'link':issued['link'],'code':issued['code']}).encode(),headers={'X-Temu-Invite':'1'})
+    with opener.open(unlock) as response:self.assertEqual(response.status,200)
+    with opener.open(url+'/api/invite/media/portrait-1.jpg') as response:self.assertEqual(response.read(),media)
+  finally:http.shutdown();http.server_close();thread.join()
 if __name__=='__main__':unittest.main()

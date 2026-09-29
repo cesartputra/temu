@@ -10,7 +10,13 @@ Jangan upload node_modules, server-data, work, .env, kunci server, database, ata
 
 Dashboard Helipod → New Project → GitHub/GitLab → pilih repository dan branch. Gunakan Dockerfile yang disertakan. Build/start command override dapat dikosongkan karena sudah ada CMD pada Dockerfile. Gunakan layanan always-on, satu replica; jangan mengaktifkan autoscaling beberapa replica untuk database SQLite ini.
 
-Tambahkan **persistent volume** dengan mount path `/data` sebelum mengimpor data. Storage container biasa bersifat sementara. Pastikan proses dapat menulis ke volume. Jangan mount ke `/app`, karena akan menutupi kode. Sebelum membagikan undangan, unggah empat berkas media ke `/data/private-media` melalui akses volume privat yang disediakan Helipod. Cara transfer ke volume perlu dipastikan pada akun/fitur Helipod Anda; dokumentasi publik yang tersedia belum memastikan adanya upload berkas lewat dashboard.
+Tambahkan **persistent volume** dengan mount path `/data` sebelum mengimpor data. Storage container biasa bersifat sementara. Pastikan proses dapat menulis ke volume. Jangan mount ke `/app`, karena akan menutupi kode. Setelah layanan berjalan, unggah empat berkas media ke `/data/private-media` melalui endpoint pengelola HTTPS:
+
+```sh
+python3 deploy/upload_media.py https://DOMAIN-HELIPOD-ANDA private-media
+```
+
+Skrip meminta kunci pengelola tanpa menampilkannya di layar, lalu mengunggah hanya empat nama berkas yang diizinkan. Server memeriksa kunci, format, ukuran maksimal 30 MB, dan menyimpannya secara atomik di volume privat.
 
 ## 3. Domain dan Variables
 

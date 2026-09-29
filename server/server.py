@@ -1,5 +1,5 @@
 """Temu local / self-hosted sync server. Python 3.10+, standard library only."""
-import argparse, copy, hashlib, hmac, json, os, re, secrets, sqlite3, threading, time
+import argparse, copy, hashlib, hmac, json, os, re, secrets, sqlite3, tempfile, threading, time
 from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
@@ -182,6 +182,28 @@ def make_handler(database,token,allowed_hosts):
                         self.wfile.write(chunk);remaining-=len(chunk)
             except (BrokenPipeError,ConnectionResetError):pass
         def do_HEAD(self):return self.do_GET()
+        def do_PUT(self):
+            path=urlsplit(self.path).path
+            if not path.startswith('/api/admin/media/'):return self.reply(404,{'error':'Tidak ditemukan.'})
+            if not self.authorized() or self.headers.get('X-Temu-Media')!='1':return self.reply(401,{'error':'Akses pengelola diperlukan.'})
+            name=path.rsplit('/',1)[-1]
+            if name not in ('portrait-1.jpg','portrait-2.jpg','portrait-3.jpg','film.mp4'):return self.reply(404,{'error':'Media tidak ditemukan.'})
+            try:size=int(self.headers.get('Content-Length','0'))
+            except ValueError:return self.reply(400,{'error':'Ukuran media tidak valid.'})
+            if not 12<=size<=30*1024*1024:return self.reply(413,{'error':'Media harus berukuran paling banyak 30 MB.'})
+            try:
+                self.connection.settimeout(60);data=self.rfile.read(size)
+                if len(data)!=size:return self.reply(400,{'error':'Unggahan tidak lengkap.'})
+                valid=(data.startswith(b'\xff\xd8\xff') and data.endswith(b'\xff\xd9')) if name.endswith('.jpg') else data[4:8]==b'ftyp'
+                if not valid:return self.reply(400,{'error':'Format media tidak sesuai.'})
+                directory=Path(os.environ.get('TEMU_PRIVATE_MEDIA_DIR',str(ROOT/'private-media')))
+                directory.mkdir(parents=True,exist_ok=True,mode=0o700)
+                with tempfile.NamedTemporaryFile(dir=directory,prefix='.upload-',delete=False) as out:
+                    temp=Path(out.name);os.chmod(temp,0o600);out.write(data);out.flush();os.fsync(out.fileno())
+                try:os.replace(temp,directory/name)
+                finally:temp.unlink(missing_ok=True)
+                return self.reply(200,{'ok':True,'name':name,'bytes':size})
+            except (OSError,TimeoutError):return self.reply(503,{'error':'Media tidak dapat disimpan.'})
         def do_GET(self):
             if not self.safe_host():return self.reply(403,{'error':'Host tidak diizinkan.'})
             path=urlsplit(self.path).path
