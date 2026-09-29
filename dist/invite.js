@@ -6,8 +6,8 @@ async function playMusic(){try{await music.play();}catch{}setMusicState();}
 musicToggle.addEventListener('click',async()=>{if(music.paused)await playMusic();else{music.pause();setMusicState();}});
 music.addEventListener('play',setMusicState);music.addEventListener('pause',setMusicState);
 // Browsers may block audible autoplay. A first gesture retries without obstructing reading.
-document.addEventListener('pointerdown',()=>{if(music.paused)playMusic();},{once:true});
-document.addEventListener('keydown',()=>{if(music.paused)playMusic();},{once:true});
+document.addEventListener('pointerdown',event=>{if(!event.target.closest('#music-toggle')&&music.paused)playMusic();},{once:true});
+document.addEventListener('keydown',()=>{if(document.activeElement!==musicToggle&&music.paused)playMusic();},{once:true});
 function safeMap(value){try{const url=new URL(value);return url.protocol==='https:'&&['maps.app.goo.gl','www.google.com','google.com','maps.google.com'].includes(url.hostname)?url.href:null;}catch{return null;}}
 function dateText(raw,options){if(!/^\d{4}-\d{2}-\d{2}$/.test(raw||''))return 'Tanggal akan diinformasikan';return new Date(raw+'T12:00:00').toLocaleDateString('id-ID',options);}
 function countdown(raw){if(!/^\d{4}-\d{2}-\d{2}$/.test(raw||''))return;const target=new Date(raw+'T00:00:00+07:00').getTime(),days=Math.ceil((target-Date.now())/86400000);$('#countdown').textContent=days>0?days+' hari menuju hari bahagia':days===0?'Hari bahagia telah tiba':'Terima kasih telah merayakan bersama kami';}
