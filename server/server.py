@@ -130,6 +130,7 @@ def make_handler(database,token,allowed_hosts):
         def __init__(self,*args,**kwargs):super().__init__(*args,directory=str(ROOT/'dist'),**kwargs)
         def log_message(self,fmt,*args):pass # Avoid logging credentials, QR values or guest data.
         def end_headers(self):
+            if not urlsplit(self.path).path.startswith('/api/') and not any(header.lower().startswith(b'cache-control:') for header in self._headers_buffer):self.send_header('Cache-Control','no-store')
             self.send_header('X-Content-Type-Options','nosniff');self.send_header('Referrer-Policy','no-referrer');self.send_header('X-Frame-Options','DENY')
             super().end_headers()
         def safe_host(self):return self.headers.get('Host','').split(':')[0] in allowed_hosts
