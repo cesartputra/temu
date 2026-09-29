@@ -11,10 +11,48 @@ document.addEventListener('pointerdown',event=>{if(!event.target.closest('#music
 document.addEventListener('keydown',()=>{if(document.activeElement!==musicToggle&&music.paused)playMusic();},{once:true});
 function safeMap(value){try{const url=new URL(value);return url.protocol==='https:'&&['maps.app.goo.gl','www.google.com','google.com','maps.google.com'].includes(url.hostname)?url.href:null;}catch{return null;}}
 function dateText(raw,options){if(!/^\d{4}-\d{2}-\d{2}$/.test(raw||''))return 'Tanggal akan diinformasikan';return new Date(raw+'T12:00:00').toLocaleDateString('id-ID',options);}
-function countdown(raw){if(!/^\d{4}-\d{2}-\d{2}$/.test(raw||''))return;const target=new Date(raw+'T00:00:00+07:00').getTime(),days=Math.ceil((target-Date.now())/86400000);$('#countdown').textContent=days>0?days+' hari menuju hari bahagia':days===0?'Hari bahagia telah tiba':'Terima kasih telah merayakan bersama kami';}
+let countdownTimer;
+function countdown(raw){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(raw||''))return;
+  clearInterval(countdownTimer);
+  const target=new Date(raw+'T00:00:00+07:00').getTime();
+  function render(){
+    const remaining=Math.max(0,target-Date.now());
+    const totalMinutes=Math.ceil(remaining/60000);
+    const days=Math.floor(totalMinutes/1440);
+    const hours=Math.floor(totalMinutes%1440/60);
+    const minutes=totalMinutes%60;
+    $('#hero-days').textContent=String(days);
+    $('#hero-hours').textContent=String(hours).padStart(2,'0');
+    $('#hero-minutes').textContent=String(minutes).padStart(2,'0');
+    $('#countdown').textContent=remaining>0?days+' hari menuju hari bahagia':'Hari bahagia telah tiba';
+    if(!remaining)clearInterval(countdownTimer);
+  }
+  render();
+  if(target>Date.now())countdownTimer=setInterval(render,15000);
+}
 async function invitePost(path,payload){const response=await fetch('/api/invite/'+path,{method:'POST',headers:{'Content-Type':'application/json','X-Temu-Invite':'1'},body:JSON.stringify(payload),cache:'no-store',signal:AbortSignal.timeout(12000)});const data=await response.json();if(!response.ok)throw Error(data.error||'Permintaan belum berhasil.');return data;}
 function recipient(guest){return guest.name+(guest.quota===2?' & Pasangan':guest.quota>2?' & Keluarga':'');}
-function showPersonal(info){$('#cover-recipient').textContent=recipient(info.guest);$('#guest-cover').hidden=false;$('#invitation').hidden=true;$('#rsvp-form').hidden=false;$('#wish-form').hidden=false;$('#rsvp-intro').textContent='Konfirmasi untuk '+info.guest.name+'. Undangan berlaku hingga '+info.guest.quota+' orang.';$('#rsvp-count').max=String(info.guest.quota);if(info.rsvp){const choice=$('#rsvp-form input[value="'+info.rsvp.status+'"]');if(choice)choice.checked=true;$('#rsvp-count').value=String(info.rsvp.count||1);$('#rsvp-count-wrap').hidden=info.rsvp.status!=='attending';$('#rsvp-status').textContent=info.rsvp.status==='attending'?'Tersimpan: hadir '+info.rsvp.count+' orang.':'Tersimpan: belum bisa hadir.';}if(info.wish)$('#wish-message').value=info.wish.message;}
+function showPersonal(info){
+  $('#cover-recipient').textContent=recipient(info.guest);
+  $('#guest-cover').hidden=false;
+  $('#invitation').hidden=true;
+  $('#rsvp-form').hidden=false;
+  $('#wish-form').hidden=false;
+  $('#rsvp-intro').textContent='Konfirmasi untuk '+info.guest.name+'. Undangan berlaku hingga '+info.guest.quota+' orang.';
+  const countSelect=$('#rsvp-count');
+  countSelect.replaceChildren();
+  for(let count=1;count<=info.guest.quota;count++)countSelect.add(new Option(String(count),String(count)));
+  countSelect.value=String(info.guest.quota);
+  if(info.rsvp){
+    const choice=$('#rsvp-form input[value="'+info.rsvp.status+'"]');
+    if(choice)choice.checked=true;
+    if(info.rsvp.status==='attending')countSelect.value=String(info.rsvp.count);
+    $('#rsvp-count-wrap').hidden=info.rsvp.status!=='attending';
+    $('#rsvp-status').textContent=info.rsvp.status==='attending'?'Tersimpan: hadir '+info.rsvp.count+' orang.':'Tersimpan: belum bisa hadir.';
+  }
+  if(info.wish)$('#wish-message').value=info.wish.message;
+}
 $('#open-personal').addEventListener('click',()=>{$('#guest-cover').hidden=true;$('#invitation').hidden=false;window.scrollTo(0,0);$('#hero-video').play().catch(()=>{});if(music.paused)playMusic();});
 document.querySelectorAll('a[href^="#"]').forEach(anchor=>anchor.addEventListener('click',event=>{if(!personal)return;const target=document.querySelector(anchor.getAttribute('href'));if(target){event.preventDefault();target.scrollIntoView({behavior:'smooth'});}}));
 $('#rsvp-form').addEventListener('change',()=>{$('#rsvp-count-wrap').hidden=$('#rsvp-form input[name="status"]:checked')?.value!=='attending';});
