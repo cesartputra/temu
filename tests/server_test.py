@@ -30,6 +30,22 @@ class ServerTests(unittest.TestCase):
  def test_invalid_phone_and_oversized_template_rejected(self):
   op=change(self.initial);op['changes'][0]['after']['phone']='javascript:bad';self.assertFalse(self.db.sync({'event':'wedding','operations':[op]})['results'][0]['ok'])
   bad=seed();bad['event']['invitationText']='x'*2001;self.assertRaises(ValueError,server.validate,bad)
+ def test_only_one_event_and_deleted_event_cannot_return(self):
+  other=seed();other['event']['id']='other';op={'id':str(uuid.uuid4()),'event':'other','kind':'bootstrap','state':other}
+  self.assertFalse(self.db.sync({'event':'other','operations':[op]})['results'][0]['ok'])
+  self.assertTrue(self.db.delete_event('wedding'))
+  self.assertEqual(self.db.events(),[])
+  self.assertFalse(self.db.sync({'event':'wedding','operations':[bootstrap(self.initial)]})['results'][0]['ok'])
+  with sqlite3.connect(sorted(self.db.backup_dir.glob('*.sqlite3'))[-1]) as c:self.assertEqual(c.execute('SELECT count(*) FROM events').fetchone()[0],0)
+ def test_guest_removal_revokes_private_access(self):
+  access=server.GuestAccess(self.db);with_phone=copy.deepcopy(self.initial);with_phone['guests'][0]['phone']='6281234567890'
+  op={'id':str(uuid.uuid4()),'event':'wedding','kind':'change','meta':None,'changes':[{'id':'g','before':self.initial['guests'][0],'after':with_phone['guests'][0]}],'logs':[]}
+  self.assertTrue(self.db.sync({'event':'wedding','operations':[op]})['results'][0]['ok'])
+  issued=access.issue('wedding','g')
+  removed={'id':str(uuid.uuid4()),'event':'wedding','kind':'change','meta':None,'changes':[{'id':'g','before':with_phone['guests'][0],'after':None}],'logs':[]}
+  self.assertTrue(self.db.sync({'event':'wedding','operations':[removed]})['results'][0]['ok'])
+  with self.db.connect() as c:self.assertEqual(c.execute('SELECT count(*) FROM invitation_access').fetchone()[0],0)
+  self.assertRaises(server.Denied,access.unlock,issued['link'],issued['code'],'127.0.0.1')
  def test_api_auth_and_same_origin(self):
   token='a'*40;http=server.ThreadingHTTPServer(('127.0.0.1',0),server.make_handler(self.db,token,{'127.0.0.1'}));thread=threading.Thread(target=http.serve_forever,daemon=True);thread.start();url=f'http://127.0.0.1:{http.server_port}'
   try:
@@ -40,5 +56,11 @@ class ServerTests(unittest.TestCase):
    req=urllib.request.Request(url+'/api/local-session',data=b'',headers={'X-Temu-Local':'1','Origin':'https://evil.example'})
    with self.assertRaises(urllib.error.HTTPError) as error:urllib.request.urlopen(req)
    self.assertEqual(error.exception.code,403)
+   req=urllib.request.Request(url+'/api/events/wedding',method='DELETE',headers={'Authorization':'Bearer '+token})
+   with self.assertRaises(urllib.error.HTTPError) as error:urllib.request.urlopen(req)
+   self.assertEqual(error.exception.code,401)
+   req.add_header('X-Temu-Delete','1')
+   with urllib.request.urlopen(req) as response:self.assertTrue(json.load(response)['ok'])
+   self.assertEqual(self.db.events(),[])
   finally:http.shutdown();http.server_close();thread.join()
 if __name__=='__main__':unittest.main()

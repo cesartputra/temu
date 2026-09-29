@@ -2,3 +2,5 @@
 .sync-banner{padding:12px 16px;background:#e7eee7;border:1px solid #c4d2c6;border-radius:8px;font-size:.9rem}.conflict{border-top:1px solid var(--line);padding:18px 0}#loading{position:fixed;inset:0;display:grid;place-items:center;background:#f6f7f4;z-index:100;padding:30px;text-align:center}
 textarea{font:inherit;line-height:1.5;display:block;width:100%;padding:12px;border:1px solid #b8c5bb;border-radius:8px;color:var(--green);resize:vertical;margin-top:8px;min-height:130px}.qr-preview svg{max-height:280px}td .actions{margin:0}
 a.button{display:inline-flex;align-items:center;min-height:48px;padding:12px 18px;background:var(--green);color:white;text-decoration:none;border-radius:8px}
+
+button.danger{border-color:#8d3e38;color:#8d3e38}button.danger:hover{background:#fff1ef}

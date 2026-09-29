@@ -16,5 +16,6 @@ for(const g of state.guests){const prior=r.state.guests.find(x=>x.id===g.id);if(
 validate(state);r.outbox.push(TemuModel.operation(r.state,state));
 }else{if(r.outbox.length)throw Error('Sinkronkan perubahan sebelum mengganti acara.');r.outbox=[{id:crypto.randomUUID(),kind:'bootstrap',event:state.event.id,state:structuredClone(state)}];r.serverRevision=0;r.lastSync=null;}
 r.state=state;return r;});}
-root.TemuStore={open,read,transaction,init,mutate,replace,backup,channel};
+async function clearEvent(state,validate){validate(state);return transaction(r=>{r.state=structuredClone(state);r.outbox=[{id:crypto.randomUUID(),kind:'bootstrap',event:state.event.id,state:structuredClone(state)}];r.conflicts=[];r.backups=[];r.lastSync=null;r.serverRevision=0;r.serverBackupAt=null;r.serverBackupError=null;r.config={enabled:false,token:''};return r;});}
+root.TemuStore={open,read,transaction,init,mutate,replace,clearEvent,backup,channel};
 })(globalThis);

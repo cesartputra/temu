@@ -44,7 +44,11 @@ Ekspor cadangan terenkripsi dari aplikasi lokal dan pulihkan di aplikasi domain 
 
 Isi Pengaturan → Alamat undangan publik HTTPS dengan origin yang sama, misalnya `https://undangan.domain-anda.id`. Pastikan acara Cesar & Revalina, 21 November 2026, waktu akad/resepsi TBA, Steikhaus Bandung, serta link Maps yang diberikan sudah benar. Sinkronkan, lalu buat tautan undangan dari daftar tamu. Bagikan kode akses secara privat terpisah; siapa pun yang memperoleh tautan beserta kode tetap bisa membukanya.
 
-Perangkat petugas berikutnya: buka domain yang sama, masukkan kunci server, pilih **Buka acara dari server** dan acara yang sudah dimigrasikan.
+Perangkat petugas berikutnya: buka domain yang sama, masukkan kunci server, pilih **Buka acara saya dari server** dan acara yang sudah dimigrasikan.
+
+Instalasi ini hanya menerima satu acara aktif. Dari perangkat baru, isi kunci lalu pilih **Buka acara saya dari server** sebelum menekan Hubungkan; daftar tamu dan QR yang sudah ada akan diambil tanpa membuat acara kosong kedua.
+
+Pengelola dapat menghapus tamu dari formulir Ubah. Jika tamu pernah check-in, nama, nomor, dan QR diganti dengan catatan anonim agar jumlah hadir tetap dapat diaudit. Akses undangan lama dicabut setelah sinkronisasi. Tombol **Hapus acara** di Pengaturan hanya tersedia saat server terhubung dan antrean perubahan kosong; tindakan ini menghapus acara, daftar tamu, akses privat, foto/video, serta cadangan otomatis pada server. Buat cadangan terenkripsi yang ingin disimpan sebelum menghapus acara.
 
 ## 5. Pemeriksaan sebelum membagikan
 

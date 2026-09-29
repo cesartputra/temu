@@ -36,6 +36,7 @@ def validate(s):
         if type(g.get('quota')) is not int or not 1<=g['quota']<=1000 or type(g.get('arrived')) is not int or not 0<=g['arrived']<=g['quota']: raise ValueError('Kuota tidak valid.')
         if g['id'] in ids or g['code'] in codes: raise ValueError('Kode / ID tamu duplikat.')
         if 'phone' in g and (not isinstance(g['phone'],str) or (g['phone'] and not re.fullmatch(r'[1-9]\d{7,14}',g['phone']))):raise ValueError('Nomor WhatsApp tidak valid.')
+        if 'deleted' in g and (type(g['deleted']) is not bool or (g['deleted'] and (g['active'] or g['name']!='Tamu dihapus' or g.get('phone') or g['group']))):raise ValueError('Tamu yang dihapus tidak valid.')
         ids.add(g['id']);codes.add(g['code'])
     logids=set()
     for l in s['logs']:
@@ -83,6 +84,7 @@ class Database:
             c.executescript('''PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,state TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0,updated TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS operations(event TEXT NOT NULL,id TEXT NOT NULL,fingerprint TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY(event,id));
+            CREATE TABLE IF NOT EXISTS deleted_events(id TEXT PRIMARY KEY,deleted TEXT NOT NULL);
             ''')
         os.chmod(self.path,0o600)
     def connect(self):
@@ -113,7 +115,16 @@ class Database:
                     if previous[0]!=fingerprint:raise ValueError('ID operasi sudah dipakai dengan isi berbeda.')
                     results.append(json.loads(previous[1]));continue
                 try:
+                    if op.get('kind')=='bootstrap' and state is None:
+                        if c.execute('SELECT 1 FROM deleted_events WHERE id=?',(event,)).fetchone():raise ValueError('Acara sudah dihapus dan tidak dapat dibuat ulang.')
+                        if c.execute('SELECT 1 FROM events WHERE id<>? LIMIT 1',(event,)).fetchone():raise ValueError('Server ini hanya untuk satu acara.')
                     state=apply(state,op,event);revision+=1;changed=True;result={'id':op['id'],'ok':True}
+                    if op.get('kind')=='change' and c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='invitation_access'").fetchone():
+                        for change in op.get('changes',[]):
+                            if change.get('after') is None or change['after'].get('deleted'):
+                                links=[row[0] for row in c.execute('SELECT link_hash FROM invitation_access WHERE event=? AND guest=?',(event,change['id']))]
+                                for link in links:c.execute('DELETE FROM invitation_sessions WHERE link_hash=?',(link,))
+                                c.execute('DELETE FROM invitation_access WHERE event=? AND guest=?',(event,change['id']))
                 except (ValueError,KeyError,TypeError,AttributeError) as e:result={'id':op['id'],'ok':False,'reason':str(e)}
                 c.execute('INSERT INTO operations VALUES(?,?,?,?)',(event,op['id'],fingerprint,encode(result)));results.append(result)
             if state is not None:
@@ -123,6 +134,21 @@ class Database:
             return {'state':state,'revision':revision,'results':results,'backupAt':datetime.fromtimestamp(self.last_backup,timezone.utc).isoformat() if self.last_backup else None,'backupError':self.backup_error}
     def events(self):
         with self.connect() as c:return [{'id':r[0],'name':json.loads(r[1])['event']['name'],'updated':r[2]} for r in c.execute('SELECT id,state,updated FROM events ORDER BY updated DESC')]
+    def delete_event(self,event):
+        with self.lock,self.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            if not c.execute('SELECT 1 FROM events WHERE id=?',(event,)).fetchone():return False
+            if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='invitation_access'").fetchone():
+                links=[row[0] for row in c.execute('SELECT link_hash FROM invitation_access WHERE event=?',(event,))]
+                for link in links:c.execute('DELETE FROM invitation_sessions WHERE link_hash=?',(link,))
+                c.execute('DELETE FROM invitation_access WHERE event=?',(event,))
+            c.execute('DELETE FROM operations WHERE event=?',(event,))
+            c.execute('DELETE FROM events WHERE id=?',(event,))
+            c.execute('INSERT OR REPLACE INTO deleted_events VALUES(?,?)',(event,now()))
+            c.commit()
+            for old in self.backup_dir.glob('temu-*.sqlite3'):old.unlink()
+            self.backup(force=True)
+            return True
 
 def make_handler(database,token,allowed_hosts):
     guest_access=GuestAccess(database)
@@ -183,6 +209,15 @@ def make_handler(database,token,allowed_hosts):
                         self.wfile.write(chunk);remaining-=len(chunk)
             except (BrokenPipeError,ConnectionResetError):pass
         def do_HEAD(self):return self.do_GET()
+        def do_DELETE(self):
+            path=urlsplit(self.path).path
+            if not path.startswith('/api/events/') or not re.fullmatch(r'[A-Za-z0-9_-]{1,200}',path[len('/api/events/'):]):return self.reply(404,{'error':'Tidak ditemukan.'})
+            if not self.authorized() or self.headers.get('X-Temu-Delete')!='1':return self.reply(401,{'error':'Akses pengelola diperlukan.'})
+            if not database.delete_event(path[len('/api/events/'):]):return self.reply(404,{'error':'Acara tidak ditemukan.'})
+            directory=os.environ.get('TEMU_PRIVATE_MEDIA_DIR')
+            if directory:
+                for name in ('portrait-1.jpg','portrait-2.jpg','portrait-3.jpg','film.mp4'):(Path(directory)/name).unlink(missing_ok=True)
+            return self.reply(200,{'ok':True})
         def do_PUT(self):
             path=urlsplit(self.path).path
             if not path.startswith('/api/admin/media/'):return self.reply(404,{'error':'Tidak ditemukan.'})

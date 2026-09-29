@@ -73,7 +73,7 @@ Server bawaan hanya mendengarkan `127.0.0.1`, sehingga aman untuk pengembangan l
 4. Atur `TEMU_SERVER_TOKEN` dengan rahasia acak minimal 32 karakter melalui pengelola rahasia host, atau gunakan kunci yang dihasilkan dalam direktori privat.
 5. Masukkan kunci tersebut pada perangkat yang dipercaya. Permintaan API membawa bearer token dan tidak dicache service worker. Tidak ada CORS lintas asal.
 
-Kode ini menyertakan server mandiri Python, **bukan deployment cloud yang sudah aktif**. Manifest Sites lama hanya untuk identitas proyek awal; hosting statis saja tidak menjalankan server Python ini.
+Kode ini menyertakan server mandiri Python dan digunakan oleh instalasi Helipod acara Cesar & Revalina. Domain aktif dan status deploy tetap perlu diperiksa di Helipod; hosting statis saja tidak menjalankan server Python ini.
 
 ## Struktur kode
 
