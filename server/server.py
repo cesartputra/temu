@@ -1,5 +1,5 @@
 """Temu local / self-hosted sync server. Python 3.10+, standard library only."""
-import argparse, copy, hashlib, hmac, json, os, re, secrets, sqlite3, tempfile, threading, time
+import argparse, base64, copy, hashlib, hmac, json, os, re, secrets, sqlite3, tempfile, threading, time
 from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
@@ -85,7 +85,11 @@ class Database:
             CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,state TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0,updated TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS operations(event TEXT NOT NULL,id TEXT NOT NULL,fingerprint TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY(event,id));
             CREATE TABLE IF NOT EXISTS deleted_events(id TEXT PRIMARY KEY,deleted TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS app_secrets(name TEXT PRIMARY KEY,value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS rsvps(event TEXT NOT NULL,guest TEXT NOT NULL,status TEXT NOT NULL,count INTEGER NOT NULL,updated TEXT NOT NULL,PRIMARY KEY(event,guest));
+            CREATE TABLE IF NOT EXISTS wishes(event TEXT NOT NULL,guest TEXT NOT NULL,message TEXT NOT NULL,updated TEXT NOT NULL,PRIMARY KEY(event,guest));
             ''')
+            c.execute('INSERT OR IGNORE INTO app_secrets(name,value) VALUES(?,?)',('invite-signing',secrets.token_urlsafe(48)))
         os.chmod(self.path,0o600)
     def connect(self):
         c=sqlite3.connect(self.path,timeout=20,factory=ClosingConnection);c.execute('PRAGMA synchronous=FULL');return c
@@ -125,6 +129,13 @@ class Database:
                                 links=[row[0] for row in c.execute('SELECT link_hash FROM invitation_access WHERE event=? AND guest=?',(event,change['id']))]
                                 for link in links:c.execute('DELETE FROM invitation_sessions WHERE link_hash=?',(link,))
                                 c.execute('DELETE FROM invitation_access WHERE event=? AND guest=?',(event,change['id']))
+                    if op.get('kind')=='change':
+                        for change in op.get('changes',[]):
+                            if change.get('after') is None or change['after'].get('deleted'):
+                                c.execute('DELETE FROM rsvps WHERE event=? AND guest=?',(event,change['id']))
+                                c.execute('DELETE FROM wishes WHERE event=? AND guest=?',(event,change['id']))
+                            elif change['after']['active']:
+                                c.execute("UPDATE rsvps SET count=MIN(count,?),updated=? WHERE event=? AND guest=? AND status='attending' AND count>?",(change['after']['quota'],now(),event,change['id'],change['after']['quota']))
                 except (ValueError,KeyError,TypeError,AttributeError) as e:result={'id':op['id'],'ok':False,'reason':str(e)}
                 c.execute('INSERT INTO operations VALUES(?,?,?,?)',(event,op['id'],fingerprint,encode(result)));results.append(result)
             if state is not None:
@@ -139,6 +150,57 @@ class Database:
         if len(rows)!=1:return None
         event=json.loads(rows[0][0])['event']
         return {key:event.get(key,{} if key=='wedding' else '') for key in ('name','date','wedding')}
+    def invite_signature(self,c,event,guest):
+        secret=c.execute('SELECT value FROM app_secrets WHERE name=?',('invite-signing',)).fetchone()[0]
+        digest=hmac.new(secret.encode(),('temu-invite-v1:'+event+':'+guest).encode(),hashlib.sha256).digest()
+        return base64.urlsafe_b64encode(digest).decode().rstrip('=')
+    def invite_guest(self,guest,key):
+        if not isinstance(guest,str) or not 1<=len(guest)<=200 or not isinstance(key,str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}',key):raise ValueError('Tautan tamu tidak valid.')
+        with self.connect() as c:
+            rows=c.execute('SELECT id,state FROM events LIMIT 2').fetchall()
+            if len(rows)!=1:raise ValueError('Acara tidak tersedia.')
+            event,state=rows[0][0],json.loads(rows[0][1])
+            if not hmac.compare_digest(key,self.invite_signature(c,event,guest)):raise ValueError('Tautan tamu tidak valid.')
+            found=next((g for g in state['guests'] if g['id']==guest and g['active'] and not g.get('deleted')),None)
+            if not found:raise ValueError('Undangan tamu tidak aktif.')
+            rsvp=c.execute('SELECT status,count,updated FROM rsvps WHERE event=? AND guest=?',(event,guest)).fetchone()
+            wish=c.execute('SELECT message,updated FROM wishes WHERE event=? AND guest=?',(event,guest)).fetchone()
+            return {'event':event,'guest':{'name':found['name'],'quota':found['quota']},'rsvp':{'status':rsvp[0],'count':rsvp[1],'updated':rsvp[2]} if rsvp else None,'wish':{'message':wish[0],'updated':wish[1]} if wish else None}
+    def guest_link(self,event,guest):
+        with self.connect() as c:
+            row=c.execute('SELECT state FROM events WHERE id=?',(event,)).fetchone()
+            if not row:raise ValueError('Acara tidak ditemukan.')
+            found=next((g for g in json.loads(row[0])['guests'] if g['id']==guest and g['active'] and not g.get('deleted')),None)
+            if not found:raise ValueError('Tamu tidak aktif atau tidak ditemukan.')
+            return {'guest':guest,'key':self.invite_signature(c,event,guest)}
+    def save_rsvp(self,guest,key,status,count):
+        with self.lock:
+            info=self.invite_guest(guest,key)
+            if status not in ('attending','declined') or type(count) is not int or (status=='attending' and not 1<=count<=info['guest']['quota']) or (status=='declined' and count!=0):raise ValueError('Konfirmasi kehadiran tidak valid.')
+            with self.connect() as c:c.execute('INSERT INTO rsvps VALUES(?,?,?,?,?) ON CONFLICT(event,guest) DO UPDATE SET status=excluded.status,count=excluded.count,updated=excluded.updated',(info['event'],guest,status,count,now()))
+            self.backup()
+            return self.invite_guest(guest,key)
+    def save_wish(self,guest,key,message):
+        with self.lock:
+            info=self.invite_guest(guest,key)
+            if not isinstance(message,str) or not 1<=len(message.strip())<=500:raise ValueError('Doa harus berisi 1–500 karakter.')
+            clean=message.strip()
+            with self.connect() as c:c.execute('INSERT INTO wishes VALUES(?,?,?,?) ON CONFLICT(event,guest) DO UPDATE SET message=excluded.message,updated=excluded.updated',(info['event'],guest,clean,now()))
+            self.backup()
+            return self.invite_guest(guest,key)
+    def public_wishes(self):
+        with self.connect() as c:
+            rows=c.execute('SELECT id,state FROM events LIMIT 2').fetchall()
+            if len(rows)!=1:return []
+            event,state=rows[0][0],json.loads(rows[0][1]);names={g['id']:g['name'] for g in state['guests'] if g['active'] and not g.get('deleted')}
+            return [{'name':names[g],'message':message,'updated':updated} for g,message,updated in c.execute('SELECT guest,message,updated FROM wishes WHERE event=? ORDER BY updated DESC',(event,)) if g in names]
+    def rsvp_overview(self,event):
+        with self.connect() as c:
+            row=c.execute('SELECT state FROM events WHERE id=?',(event,)).fetchone()
+            if not row:raise ValueError('Acara tidak ditemukan.')
+            records={g:(status,count,updated) for g,status,count,updated in c.execute('SELECT guest,status,count,updated FROM rsvps WHERE event=?',(event,))}
+            guests=[{'id':g['id'],'name':g['name'],'quota':g['quota'],'status':records[g['id']][0] if g['id'] in records else 'pending','count':records[g['id']][1] if g['id'] in records else 0,'updated':records[g['id']][2] if g['id'] in records else None} for g in json.loads(row[0])['guests'] if g['active'] and not g.get('deleted')]
+            return {'guests':guests,'summary':{'attending':sum(g['status']=='attending' for g in guests),'declined':sum(g['status']=='declined' for g in guests),'pending':sum(g['status']=='pending' for g in guests),'persons':sum(g['count'] for g in guests)}}
     def delete_event(self,event):
         with self.lock,self.connect() as c:
             c.execute('BEGIN IMMEDIATE')
@@ -148,6 +210,8 @@ class Database:
                 for link in links:c.execute('DELETE FROM invitation_sessions WHERE link_hash=?',(link,))
                 c.execute('DELETE FROM invitation_access WHERE event=?',(event,))
             c.execute('DELETE FROM operations WHERE event=?',(event,))
+            c.execute('DELETE FROM rsvps WHERE event=?',(event,))
+            c.execute('DELETE FROM wishes WHERE event=?',(event,))
             c.execute('DELETE FROM events WHERE id=?',(event,))
             c.execute('INSERT OR REPLACE INTO deleted_events VALUES(?,?)',(event,now()))
             c.commit()
@@ -188,7 +252,7 @@ def make_handler(database,token,allowed_hosts):
             if not isinstance(body,dict):raise ValueError('Permintaan tidak valid.')
             return body
         def serve_invitation_media(self,name):
-            if name not in ('portrait-1.jpg','portrait-2.jpg','portrait-3.jpg','film.mp4','song.mp3'):return self.reply(404,{'error':'Media tidak ditemukan.'})
+            if name not in ('portrait-1.jpg','portrait-2.jpg','portrait-3.jpg','portrait-cesar.jpg','portrait-revalina.jpg','film.mp4','song.mp3'):return self.reply(404,{'error':'Media tidak ditemukan.'})
             if not database.public_event():return self.reply(404,{'error':'Undangan belum tersedia.'})
             path=Path(os.environ.get('TEMU_PRIVATE_MEDIA_DIR',str(ROOT/'private-media')))/name
             if not path.is_file():return self.reply(404,{'error':'Media belum tersedia.'})
@@ -222,14 +286,14 @@ def make_handler(database,token,allowed_hosts):
             if not database.delete_event(path[len('/api/events/'):]):return self.reply(404,{'error':'Acara tidak ditemukan.'})
             directory=os.environ.get('TEMU_PRIVATE_MEDIA_DIR')
             if directory and not database.events():
-                for name in ('portrait-1.jpg','portrait-2.jpg','portrait-3.jpg','film.mp4','song.mp3'):(Path(directory)/name).unlink(missing_ok=True)
+                for name in ('portrait-1.jpg','portrait-2.jpg','portrait-3.jpg','portrait-cesar.jpg','portrait-revalina.jpg','film.mp4','song.mp3'):(Path(directory)/name).unlink(missing_ok=True)
             return self.reply(200,{'ok':True})
         def do_PUT(self):
             path=urlsplit(self.path).path
             if not path.startswith('/api/admin/media/'):return self.reply(404,{'error':'Tidak ditemukan.'})
             if not self.authorized() or self.headers.get('X-Temu-Media')!='1':return self.reply(401,{'error':'Akses pengelola diperlukan.'})
             name=path.rsplit('/',1)[-1]
-            if name not in ('portrait-1.jpg','portrait-2.jpg','portrait-3.jpg','film.mp4','song.mp3'):return self.reply(404,{'error':'Media tidak ditemukan.'})
+            if name not in ('portrait-1.jpg','portrait-2.jpg','portrait-3.jpg','portrait-cesar.jpg','portrait-revalina.jpg','film.mp4','song.mp3'):return self.reply(404,{'error':'Media tidak ditemukan.'})
             try:size=int(self.headers.get('Content-Length','0'))
             except ValueError:return self.reply(400,{'error':'Ukuran media tidak valid.'})
             if not 12<=size<=30*1024*1024:return self.reply(413,{'error':'Media harus berukuran paling banyak 30 MB.'})
@@ -254,7 +318,12 @@ def make_handler(database,token,allowed_hosts):
             if path=='/api/invite/public':
                 event=database.public_event()
                 return self.reply(200,{'event':event}) if event else self.reply(404,{'error':'Undangan belum tersedia.'})
+            if path=='/api/invite/wishes':return self.reply(200,{'wishes':database.public_wishes()})
             if path.startswith('/api/invite/public-media/'):return self.serve_invitation_media(path.rsplit('/',1)[-1])
+            if path=='/api/invite/admin/rsvp':
+                if not self.authorized():return self.reply(401,{'error':'Akses pengelola diperlukan.'})
+                events=database.events()
+                return self.reply(200,database.rsvp_overview(events[0]['id'])) if len(events)==1 else self.reply(404,{'error':'Acara belum tersedia.'})
             if path.startswith('/api/invite/'):
                 try:
                     if path=='/api/invite/view':return self.reply(200,guest_access.session(self.headers.get('Cookie','')))
@@ -273,6 +342,19 @@ def make_handler(database,token,allowed_hosts):
                 return
             return super().do_HEAD() if self.command=='HEAD' else super().do_GET()
         def do_POST(self):
+            if self.path in ('/api/invite/guest','/api/invite/rsvp','/api/invite/wish'):
+                try:
+                    body=self.invite_body();guest=body.get('guest');key=body.get('key')
+                    if self.path.endswith('/guest'):return self.reply(200,database.invite_guest(guest,key))
+                    if self.path.endswith('/rsvp'):return self.reply(200,database.save_rsvp(guest,key,body.get('status'),body.get('count')))
+                    return self.reply(200,database.save_wish(guest,key,body.get('message')))
+                except (ValueError,TypeError) as e:return self.reply(400,{'error':str(e)})
+                except Denied as e:return self.reply(403,{'error':str(e)})
+            if self.path=='/api/invite/admin/link':
+                if not self.authorized():return self.reply(401,{'error':'Akses pengelola diperlukan.'})
+                try:
+                    body=self.invite_body();return self.reply(200,database.guest_link(body.get('event'),body.get('guest')))
+                except (ValueError,TypeError) as e:return self.reply(400,{'error':str(e)})
             if self.path in ('/api/invite/unlock','/api/invite/logout'):
                 try:
                     body=self.invite_body()

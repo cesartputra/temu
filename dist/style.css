@@ -4,3 +4,4 @@ textarea{font:inherit;line-height:1.5;display:block;width:100%;padding:12px;bord
 a.button{display:inline-flex;align-items:center;min-height:48px;padding:12px 18px;background:var(--green);color:white;text-decoration:none;border-radius:8px}
 
 button.danger{border-color:#8d3e38;color:#8d3e38}button.danger:hover{background:#fff1ef}
+.rsvp-panel{margin-bottom:22px}.rsvp-summary{display:flex;flex-wrap:wrap;gap:10px;margin:18px 0}.rsvp-summary span{padding:10px 15px;background:#edf3ed;border-radius:8px;color:#27463d}.rsvp-summary strong{font-size:1.2rem}.rsvp-list{max-height:330px;overflow:auto;border-top:1px solid #dfe5df}.rsvp-row{display:flex;justify-content:space-between;gap:16px;padding:11px 2px;border-bottom:1px solid #e7ebe7}.rsvp-row span{color:#486a5e;text-align:right}@media(max-width:600px){.rsvp-row{display:block}.rsvp-row span{display:block;text-align:left;margin-top:4px}}

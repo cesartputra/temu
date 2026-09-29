@@ -124,3 +124,11 @@ Undangan publik tidak mengirim daftar tamu, nomor telepon, PIN, atau QR masuk. Q
 Media asli tidak masuk repository publik. Salinan web `portrait-1.jpg`, `portrait-2.jpg`, `portrait-3.jpg`, `film.mp4`, dan `song.mp3` disimpan pada volume `/data/private-media` dan disajikan oleh endpoint media publik hanya selama acara aktif tersedia. Karena undangan kini publik, siapa pun yang membuka halaman dapat mengakses media tersebut. Aplikasi buku tamu tetap dapat bekerja offline setelah dimuat; halaman undangan dan medianya memerlukan koneksi.
 
 Server masih menyimpan API akses undangan lama untuk kompatibilitas data sebelumnya, tetapi halaman undangan dan pengelola tidak menggunakannya. API pengelola daftar tamu tetap membutuhkan kunci server. Perubahan acara di Pengaturan akan muncul pada halaman publik setelah sinkronisasi.
+
+## Tautan unik, RSVP, dan doa
+
+Setiap tamu aktif mendapat tautan undangan unik dari **Daftar tamu → Undangan** atau saat membuat draf WhatsApp. Tautan memakai tanda tangan acak tersimpan di database server; tidak ada kode masuk. Saat dibuka, halaman menyapa nama tamu dan menambahkan “& Pasangan” untuk kuota dua atau “& Keluarga” untuk kuota lebih dari dua. Tautan umum `/invite` tetap dapat dibaca siapa saja, tetapi RSVP dan kirim doa memerlukan tautan unik. Tautan dapat diteruskan, jadi penerima tautan dapat mengubah RSVP/doa tamu tersebut.
+
+RSVP mencatat hadir (jumlah orang tidak boleh melebihi kuota) atau tidak bisa hadir. Panel **Konfirmasi kehadiran** di daftar tamu menampilkan semua tamu aktif dan ringkasannya dari server. Panel diperbarui ketika daftar dibuka atau tombol **Perbarui** ditekan, sehingga koneksi diperlukan untuk status terbaru; check-in QR tetap berjalan offline. Setiap tamu dapat menulis satu doa dan memperbaruinya. Doa yang dikirim tampil kepada semua pengunjung undangan dengan nama tamu. Hapus/nonaktifkan tamu membuat tautannya tidak berlaku; penghapusan menghapus RSVP dan doanya dari server.
+
+Foto profil pasangan `portrait-cesar.jpg` dan `portrait-revalina.jpg` disimpan di volume media Helipod, bukan GitHub publik.

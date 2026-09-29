@@ -2,7 +2,7 @@
 
 ## 1. Siapkan sumber
 
-Gunakan isi folder `tamu-digital` sebagai root repository GitHub/GitLab. Dockerfile harus berada di root repository. Repository ini publik, sehingga `private-media/` diabaikan Git dan Docker. Foto/video/musik harus dipindahkan secara terpisah ke volume privat `/data/private-media` dengan nama `portrait-1.jpg`, `portrait-2.jpg`, `portrait-3.jpg`, dan `film.mp4`, dan `song.mp3`. Media undangan disajikan publik oleh server selama acara aktif; jangan taruh berkas asli dalam repository publik.
+Gunakan isi folder `tamu-digital` sebagai root repository GitHub/GitLab. Dockerfile harus berada di root repository. Repository ini publik, sehingga `private-media/` diabaikan Git dan Docker. Foto/video/musik dan potret profil harus dipindahkan secara terpisah ke volume privat `/data/private-media` dengan nama `portrait-1.jpg`, `portrait-2.jpg`, `portrait-3.jpg`, dan `portrait-cesar.jpg`, `portrait-revalina.jpg`, `film.mp4`, dan `song.mp3`. Media undangan disajikan publik oleh server selama acara aktif; jangan taruh berkas asli dalam repository publik.
 
 Jangan upload node_modules, server-data, work, .env, kunci server, database, atau cadangan. ZIP kode tidak memuat daftar tamu yang sedang digunakan. Simpan cadangan terenkripsi melalui aplikasi lokal sebelum migrasi.
 
@@ -10,13 +10,13 @@ Jangan upload node_modules, server-data, work, .env, kunci server, database, ata
 
 Dashboard Helipod → New Project → GitHub/GitLab → pilih repository dan branch. Gunakan Dockerfile yang disertakan. Build/start command override dapat dikosongkan karena sudah ada CMD pada Dockerfile. Gunakan layanan always-on, satu replica; jangan mengaktifkan autoscaling beberapa replica untuk database SQLite ini.
 
-Tambahkan **persistent volume** dengan mount path `/data` sebelum mengimpor data. Storage container biasa bersifat sementara. Pastikan proses dapat menulis ke volume. Jangan mount ke `/app`, karena akan menutupi kode. Setelah layanan berjalan, unggah lima berkas media ke `/data/private-media` melalui endpoint pengelola HTTPS:
+Tambahkan **persistent volume** dengan mount path `/data` sebelum mengimpor data. Storage container biasa bersifat sementara. Pastikan proses dapat menulis ke volume. Jangan mount ke `/app`, karena akan menutupi kode. Setelah layanan berjalan, unggah tujuh berkas media ke `/data/private-media` melalui endpoint pengelola HTTPS:
 
 ```sh
 python3 deploy/upload_media.py https://DOMAIN-HELIPOD-ANDA private-media
 ```
 
-Skrip meminta kunci pengelola tanpa menampilkannya di layar, lalu mengunggah hanya lima nama berkas yang diizinkan. Server memeriksa kunci, format, ukuran maksimal 30 MB, dan menyimpannya secara atomik di volume privat.
+Skrip meminta kunci pengelola tanpa menampilkannya di layar, lalu mengunggah hanya tujuh nama berkas yang diizinkan. Server memeriksa kunci, format, ukuran maksimal 30 MB, dan menyimpannya secara atomik di volume privat.
 
 ## 3. Domain dan Variables
 
@@ -54,7 +54,7 @@ Pengelola dapat menghapus tamu dari formulir Ubah. Jika tamu pernah check-in, na
 
 - Buat tamu uji, sinkronkan, restart/redeploy, lalu pastikan data masih ada dari browser/perangkat lain.
 - Buka `/invite` pada jendela privat tanpa kode: video, foto, dan musik tersedia, tanpa QR masuk atau daftar tamu.
-- Pastikan lima berkas media sudah ada di `/data/private-media`; bila belum, undangan dapat dibuka tetapi foto/video/musik belum tampil.
+- Pastikan tujuh berkas media sudah ada di `/data/private-media`; bila belum, undangan dapat dibuka tetapi foto/video/musik belum tampil.
 - Uji kamera QR pada ponsel melalui HTTPS.
 - Muat aplikasi petugas dan data, putuskan internet, check-in tamu uji, sambungkan lagi dan periksa sinkronisasi di perangkat kedua.
 - Undangan publik membutuhkan internet saat dibuka; QR yang sudah diunduh bisa ditunjukkan offline. Dua perangkat offline tetap dapat menerima QR yang sama sampai tersambung dan konflik diperiksa.
@@ -73,3 +73,5 @@ Server Python mandiri ini perlu berada di belakang HTTPS proxy Helipod. Konfigur
 - Data hilang setelah redeploy: periksa volume persisten yang sama masih terpasang pada `/data`; jangan lanjut memasukkan tamu sebelum diperbaiki.
 
 Referensi resmi: https://docs.helipod.io/quick-start dan https://docs.helipod.io/build-deploy/services
+
+Panel RSVP membutuhkan koneksi ke server. Kunci tanda tangan tautan tamu, RSVP, dan doa disimpan dalam SQLite pada volume persisten serta ikut dalam cadangan server. Jangan mengganti database dengan database kosong setelah tautan dibagikan.
