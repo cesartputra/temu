@@ -1,4 +1,4 @@
-"""Upload the four local wedding media files to Temu's private persistent volume."""
+"""Upload the five local wedding media files to Temu's private persistent volume."""
 import argparse, getpass, json, sys, urllib.error, urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -13,7 +13,7 @@ if parsed.scheme!='https' or not parsed.hostname or parsed.path or parsed.query 
     parser.error('Gunakan origin HTTPS tanpa path, mis. https://temu.helipod.app')
 token=getpass.getpass('Kunci pengelola server: ')
 if len(token)<32:parser.error('Kunci pengelola tidak valid.')
-for name in ('portrait-1.jpg','portrait-2.jpg','portrait-3.jpg','film.mp4'):
+for name in ('portrait-1.jpg','portrait-2.jpg','portrait-3.jpg','film.mp4','song.mp3'):
     path=args.media_dir/name
     if not path.is_file():parser.error(f'Berkas tidak ada: {path}')
     data=path.read_bytes()

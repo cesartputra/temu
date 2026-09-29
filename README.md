@@ -1,4 +1,4 @@
-# Temu 3 — undangan pribadi dan buku tamu digital
+# Temu — undangan digital dan buku tamu pernikahan
 
 Aplikasi pernikahan ini memakai **IndexedDB** pada perangkat dan **SQLite** pada server. Check-in disimpan dahulu dalam satu transaksi dengan antrean pengiriman. Pesan berhasil hanya muncul setelah transaksi lokal selesai. Pengiriman berjalan saat aplikasi terbuka, setelah perubahan, ketika koneksi kembali, dan setiap 30 detik.
 
@@ -115,43 +115,12 @@ Sumber perilaku integrasi: [WhatsApp Click to Chat](https://faq.whatsapp.com/591
 
 Pembaruan ini telah melewati 26 pengujian otomatis, termasuk normalisasi nomor, penyusunan tautan pesan, template, serta persistensi nomor dan template di server/cadangan. Pengiriman melalui aplikasi WhatsApp fisik belum diuji; dukungan berbagi file berbeda antarperangkat.
 
-## Undangan pernikahan pribadi — Cesar & Revalina
+## Undangan pernikahan publik — Cesar & Revalina
 
-Halaman `/invite` berisi gerbang akses. Setelah verifikasi, tamu melihat foto, video, tanggal, tempat, peta, dan QR check-in miliknya sendiri. Data acara yang disiapkan: **21 November 2026, Steikhaus Bandung**, dengan jam akad dan resepsi masih akan diinformasikan. Foto dan video sumber milik pengguna dioptimalkan untuk web; versi asli tidak diubah.
+Halaman `https://forevarwithcesar.helipod.app/invite` terbuka untuk umum tanpa kode masuk. Halaman menampilkan video sampul yang diputar otomatis tanpa suara dan berulang, musik latar dari berkas yang diberikan pengguna, potret, tanggal 21 November 2026, jadwal akad/resepsi yang masih akan diumumkan, Steikhaus Bandung, dan tautan peta. Browser dapat menolak putar otomatis musik bersuara; tombol **Putar musik** selalu tersedia. Desain memakai warna gading, arang, dan emas hangat.
 
-### Alur pengelola
+Undangan publik tidak mengirim daftar tamu, nomor telepon, PIN, atau QR masuk. QR check-in tetap dibuat di aplikasi pengelola dan dapat dibagikan melalui WhatsApp kepada masing-masing tamu. Tamu menunjukkan QR itu kepada petugas; jika tidak tersedia, petugas mencari nama pada buku tamu. Pengelola membuka **Daftar tamu → Undangan** untuk menyalin/meninjau tautan publik, atau mengirim tautan bersama QR melalui alur WhatsApp. Pengiriman pesan tetap dilakukan pengguna, bukan otomatis oleh server.
 
-1. Isi data tamu, nomor WhatsApp, dan informasi acara; tunggu sinkronisasi selesai.
-2. Pada **Daftar tamu → Undangan**, pilih **Pratinjau undangan** untuk melihat tampilan sebagai tamu. Pratinjau pengelola berlaku 10 menit dan tidak mengganti tautan tamu.
-3. Pilih **Buat / ganti akses**. Sistem membuat tautan acak dan kode 8 digit yang hanya ditampilkan pada sesi pengelola ini. Simpan kode sebelum menutup aplikasi.
-4. Kirim tautan lewat WhatsApp; sampaikan kode akses secara terpisah setelah memastikan nomor penerima. Fitur tidak mengirim pesan atau kode secara otomatis.
-5. **Cabut akses** membatalkan halaman undangan dan sesi yang terkait. QR check-in tetap berlaku; nonaktifkan undangan melalui Daftar tamu jika akses masuk acara juga perlu dibatalkan.
+Media asli tidak masuk repository publik. Salinan web `portrait-1.jpg`, `portrait-2.jpg`, `portrait-3.jpg`, `film.mp4`, dan `song.mp3` disimpan pada volume `/data/private-media` dan disajikan oleh endpoint media publik hanya selama acara aktif tersedia. Karena undangan kini publik, siapa pun yang membuka halaman dapat mengakses media tersebut. Aplikasi buku tamu tetap dapat bekerja offline setelah dimuat; halaman undangan dan medianya memerlukan koneksi.
 
-Alamat lokal tidak dapat dibagikan kepada ponsel tamu. Untuk distribusi, host aplikasi dan server di HTTPS, lalu isi **Pengaturan → Alamat undangan publik HTTPS**. Origin harus sama dengan aplikasi/API yang dideploy. Jangan mengunggah `private-media` sebagai folder statis publik.
-
-### Proteksi yang diterapkan
-
-- Tautan acak 256 bit berada di fragment URL (tidak dikirim sebagai query HTTP) dan segera dihapus dari bilah alamat setelah dibaca halaman.
-- Tautan saja tidak membuka undangan. Kode akses terpisah harus cocok dengan undangan aktif.
-- Server menyimpan hash tautan, hash kode scrypt dengan salt, serta hash sesi; kode asli tidak disimpan dalam database.
-- Lima kode salah membatasi tautan selama 15 menit; batas tambahan 30 percobaan per alamat koneksi dalam 15 menit. Di belakang proxy, batas koneksi dapat berlaku untuk seluruh pengguna; konfigurasi penerapan perlu memperhitungkan ini.
-- Sesi tamu maksimal 24 jam. Cookie `HttpOnly`, `SameSite=Strict`, dan `Secure` pada hostname nonlokal. TLS harus diterminasi oleh reverse proxy HTTPS.
-- Link berlaku 180 hari atau sampai dicabut. Tautan baru membatalkan tautan/sesi lama. Menonaktifkan tamu, mengganti QR, atau mengganti nomor membatalkan akses lama setelah perubahan sampai di server.
-- Data undangan, foto, dan video diperiksa pada setiap permintaan GET/HEAD/Range. Media disimpan di `private-media/`, di luar `dist/`. Respons memakai `Cache-Control: no-store`; service worker tidak menyimpan halaman pribadi atau API.
-- Tamu hanya menerima nama, kuota, dan kode QR sendiri, bukan daftar tamu, nomor telepon, atau PIN pengelola.
-- Permintaan perubahan memerlukan penanda permintaan dan pemeriksaan asal; API pengelola tetap memerlukan bearer token. Pairing pengelola otomatis localhost dimatikan jika hostname publik dikonfigurasi melalui `TEMU_ALLOWED_HOSTS`.
-- Skrip pemulihan database server mencabut tautan dan sesi lama, agar pemulihan snapshot tidak mengaktifkan kembali akses yang pernah dicabut.
-
-**Batas proteksi:** kode manual memverifikasi kepemilikan kredensial, bukan identitas fisik atau kepemilikan nomor WhatsApp. Orang lain yang menerima *tautan dan kode* masih dapat masuk. Tamu juga dapat menyimpan/screenshot konten yang sudah dilihat; sistem tidak dapat mencabut salinan tersebut. Verifikasi OTP WhatsApp otomatis belum terpasang dan memerlukan penyedia pengiriman. Halaman pribadi memerlukan internet agar status pencabutan dapat diperiksa; QR yang diunduh tetap dapat ditunjukkan untuk check-in offline.
-
-Acuan sesi: [OWASP Session Management](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html). Implementasi ini tidak menggantikan audit keamanan sebelum membuka layanan ke internet.
-
-Berkas tambahan:
-- `server/guest_access.py`: kredensial undangan, sesi dan pembatasan percobaan.
-- `dist/guest-admin.js`: pembuatan/pencabutan akses dan integrasi WhatsApp.
-- `dist/invite.html`, `invite.css`, `invite.js`: halaman undangan tamu.
-- `private-media/`: tiga foto dan video web, hanya boleh disajikan lewat endpoint terlindungi.
-
-Pratinjau pengembangan menggunakan port 4174 dan tamu uji terpisah. QR pratinjau tidak berlaku untuk check-in acara sebenarnya. Port 4173 tetap aplikasi utama.
-
-Validasi rilis undangan pribadi: 39 pengujian otomatis lulus. Pratinjau browser berhasil membuka undangan dengan kode yang benar, memuat semua foto, dan memiliki lebar halaman 390 px pada viewport ponsel 390 px.
+Server masih menyimpan API akses undangan lama untuk kompatibilitas data sebelumnya, tetapi halaman undangan dan pengelola tidak menggunakannya. API pengelola daftar tamu tetap membutuhkan kunci server. Perubahan acara di Pengaturan akan muncul pada halaman publik setelah sinkronisasi.

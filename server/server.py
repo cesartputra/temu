@@ -134,6 +134,11 @@ class Database:
             return {'state':state,'revision':revision,'results':results,'backupAt':datetime.fromtimestamp(self.last_backup,timezone.utc).isoformat() if self.last_backup else None,'backupError':self.backup_error}
     def events(self):
         with self.connect() as c:return [{'id':r[0],'name':json.loads(r[1])['event']['name'],'updated':r[2]} for r in c.execute('SELECT id,state,updated FROM events ORDER BY updated DESC')]
+    def public_event(self):
+        with self.connect() as c:rows=c.execute('SELECT state FROM events LIMIT 2').fetchall()
+        if len(rows)!=1:return None
+        event=json.loads(rows[0][0])['event']
+        return {key:event.get(key,{} if key=='wedding' else '') for key in ('name','date','wedding')}
     def delete_event(self,event):
         with self.lock,self.connect() as c:
             c.execute('BEGIN IMMEDIATE')
@@ -182,9 +187,9 @@ def make_handler(database,token,allowed_hosts):
             self.connection.settimeout(15);body=json.loads(self.rfile.read(size))
             if not isinstance(body,dict):raise ValueError('Permintaan tidak valid.')
             return body
-        def serve_private_media(self,name):
-            guest_access.session(self.headers.get('Cookie',''))
-            if name not in ('portrait-1.jpg','portrait-2.jpg','portrait-3.jpg','film.mp4'):return self.reply(404,{'error':'Media tidak ditemukan.'})
+        def serve_invitation_media(self,name):
+            if name not in ('portrait-1.jpg','portrait-2.jpg','portrait-3.jpg','film.mp4','song.mp3'):return self.reply(404,{'error':'Media tidak ditemukan.'})
+            if not database.public_event():return self.reply(404,{'error':'Undangan belum tersedia.'})
             path=Path(os.environ.get('TEMU_PRIVATE_MEDIA_DIR',str(ROOT/'private-media')))/name
             if not path.is_file():return self.reply(404,{'error':'Media belum tersedia.'})
             size=path.stat().st_size;start=0;end=size-1;status=200
@@ -196,7 +201,8 @@ def make_handler(database,token,allowed_hosts):
                 else:start=int(m[1]);end=min(size-1,int(m[2])) if m[2] else size-1
                 if start>end or start>=size:return self.reply(416,{'error':'Rentang tidak valid.'})
                 status=206
-            self.send_response(status);self.send_header('Content-Type','video/mp4' if name.endswith('.mp4') else 'image/jpeg');self.send_header('Cache-Control','private, no-store');self.send_header('Cross-Origin-Resource-Policy','same-origin');self.send_header('Accept-Ranges','bytes');self.send_header('Content-Length',str(end-start+1))
+            mime='video/mp4' if name.endswith('.mp4') else 'audio/mpeg' if name.endswith('.mp3') else 'image/jpeg'
+            self.send_response(status);self.send_header('Content-Type',mime);self.send_header('Cache-Control','no-store');self.send_header('Cross-Origin-Resource-Policy','same-origin');self.send_header('Accept-Ranges','bytes');self.send_header('Content-Length',str(end-start+1))
             if status==206:self.send_header('Content-Range',f'bytes {start}-{end}/{size}')
             self.end_headers()
             if self.command=='HEAD':return
@@ -216,21 +222,23 @@ def make_handler(database,token,allowed_hosts):
             if not database.delete_event(path[len('/api/events/'):]):return self.reply(404,{'error':'Acara tidak ditemukan.'})
             directory=os.environ.get('TEMU_PRIVATE_MEDIA_DIR')
             if directory and not database.events():
-                for name in ('portrait-1.jpg','portrait-2.jpg','portrait-3.jpg','film.mp4'):(Path(directory)/name).unlink(missing_ok=True)
+                for name in ('portrait-1.jpg','portrait-2.jpg','portrait-3.jpg','film.mp4','song.mp3'):(Path(directory)/name).unlink(missing_ok=True)
             return self.reply(200,{'ok':True})
         def do_PUT(self):
             path=urlsplit(self.path).path
             if not path.startswith('/api/admin/media/'):return self.reply(404,{'error':'Tidak ditemukan.'})
             if not self.authorized() or self.headers.get('X-Temu-Media')!='1':return self.reply(401,{'error':'Akses pengelola diperlukan.'})
             name=path.rsplit('/',1)[-1]
-            if name not in ('portrait-1.jpg','portrait-2.jpg','portrait-3.jpg','film.mp4'):return self.reply(404,{'error':'Media tidak ditemukan.'})
+            if name not in ('portrait-1.jpg','portrait-2.jpg','portrait-3.jpg','film.mp4','song.mp3'):return self.reply(404,{'error':'Media tidak ditemukan.'})
             try:size=int(self.headers.get('Content-Length','0'))
             except ValueError:return self.reply(400,{'error':'Ukuran media tidak valid.'})
             if not 12<=size<=30*1024*1024:return self.reply(413,{'error':'Media harus berukuran paling banyak 30 MB.'})
             try:
                 self.connection.settimeout(60);data=self.rfile.read(size)
                 if len(data)!=size:return self.reply(400,{'error':'Unggahan tidak lengkap.'})
-                valid=(data.startswith(b'\xff\xd8\xff') and data.endswith(b'\xff\xd9')) if name.endswith('.jpg') else data[4:8]==b'ftyp'
+                if name.endswith('.jpg'):valid=data.startswith(b'\xff\xd8\xff') and data.endswith(b'\xff\xd9')
+                elif name.endswith('.mp3'):valid=data.startswith(b'ID3') or (data[0]==0xff and data[1]&0xe0==0xe0)
+                else:valid=data[4:8]==b'ftyp'
                 if not valid:return self.reply(400,{'error':'Format media tidak sesuai.'})
                 directory=Path(os.environ.get('TEMU_PRIVATE_MEDIA_DIR',str(ROOT/'private-media')))
                 directory.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -243,10 +251,16 @@ def make_handler(database,token,allowed_hosts):
         def do_GET(self):
             if not self.safe_host():return self.reply(403,{'error':'Host tidak diizinkan.'})
             path=urlsplit(self.path).path
+            if path=='/api/invite/public':
+                event=database.public_event()
+                return self.reply(200,{'event':event}) if event else self.reply(404,{'error':'Undangan belum tersedia.'})
+            if path.startswith('/api/invite/public-media/'):return self.serve_invitation_media(path.rsplit('/',1)[-1])
             if path.startswith('/api/invite/'):
                 try:
                     if path=='/api/invite/view':return self.reply(200,guest_access.session(self.headers.get('Cookie','')))
-                    if path.startswith('/api/invite/media/'):return self.serve_private_media(path.rsplit('/',1)[-1])
+                    if path.startswith('/api/invite/media/'):
+                        guest_access.session(self.headers.get('Cookie',''))
+                        return self.serve_invitation_media(path.rsplit('/',1)[-1])
                 except Denied:return self.reply(401,{'error':'Masukkan kode akses untuk membuka undangan.'})
                 return self.reply(404,{'error':'Tidak ditemukan.'})
             if path.startswith('/api/'):

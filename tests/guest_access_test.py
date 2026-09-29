@@ -94,4 +94,16 @@ class GuestAccessTests(unittest.TestCase):
     with opener.open(unlock) as response:self.assertEqual(response.status,200)
     with opener.open(url+'/api/invite/media/portrait-1.jpg') as response:self.assertEqual(response.read(),media)
   finally:http.shutdown();http.server_close();thread.join()
+ def test_public_invitation_exposes_event_and_media_without_guest_data(self):
+  token='a'*40;http=server.ThreadingHTTPServer(('127.0.0.1',0),server.make_handler(self.db,token,{'127.0.0.1'}));thread=threading.Thread(target=http.serve_forever,daemon=True);thread.start();url=f'http://127.0.0.1:{http.server_port}'
+  target=Path(self.temp.name)/'public-media';target.mkdir();song=b'ID3'+b'0'*20;(target/'song.mp3').write_bytes(song)
+  try:
+   with mock.patch.dict(os.environ,{'TEMU_PRIVATE_MEDIA_DIR':str(target)}):
+    with urllib.request.urlopen(url+'/api/invite/public') as response:
+     payload=json.load(response);self.assertEqual(payload['event']['name'],self.state['event']['name']);self.assertNotIn('guests',payload);self.assertNotIn('pin',payload);self.assertNotIn('code',json.dumps(payload))
+    req=urllib.request.Request(url+'/api/invite/public-media/song.mp3',headers={'Range':'bytes=0-3'})
+    with urllib.request.urlopen(req) as response:self.assertEqual(response.status,206);self.assertEqual(response.headers['Content-Type'],'audio/mpeg');self.assertEqual(response.read(),song[:4])
+    with self.assertRaises(urllib.error.HTTPError) as error:urllib.request.urlopen(url+'/api/events')
+    self.assertEqual(error.exception.code,401);error.exception.close()
+  finally:http.shutdown();http.server_close();thread.join()
 if __name__=='__main__':unittest.main()
