@@ -215,7 +215,7 @@ def make_handler(database,token,allowed_hosts):
             if not self.authorized() or self.headers.get('X-Temu-Delete')!='1':return self.reply(401,{'error':'Akses pengelola diperlukan.'})
             if not database.delete_event(path[len('/api/events/'):]):return self.reply(404,{'error':'Acara tidak ditemukan.'})
             directory=os.environ.get('TEMU_PRIVATE_MEDIA_DIR')
-            if directory:
+            if directory and not database.events():
                 for name in ('portrait-1.jpg','portrait-2.jpg','portrait-3.jpg','film.mp4'):(Path(directory)/name).unlink(missing_ok=True)
             return self.reply(200,{'ok':True})
         def do_PUT(self):

@@ -1,5 +1,6 @@
-import copy, importlib.util, json, sqlite3, tempfile, unittest, uuid, threading, urllib.request, urllib.error
+import copy, importlib.util, json, os, sqlite3, tempfile, unittest, uuid, threading, urllib.request, urllib.error
 from pathlib import Path
+from unittest import mock
 spec=importlib.util.spec_from_file_location('server',Path(__file__).resolve().parents[1]/'server/server.py');server=importlib.util.module_from_spec(spec);spec.loader.exec_module(server)
 def seed():return {'version':1,'event':{'id':'wedding','name':'Acara uji','date':''},'guests':[{'id':'g','code':'qr','name':'Tamu Uji','group':'','quota':2,'arrived':0,'active':True}],'logs':[],'pin':None}
 def bootstrap(state):return {'id':str(uuid.uuid4()),'event':'wedding','kind':'bootstrap','state':state}
@@ -46,6 +47,18 @@ class ServerTests(unittest.TestCase):
   self.assertTrue(self.db.sync({'event':'wedding','operations':[removed]})['results'][0]['ok'])
   with self.db.connect() as c:self.assertEqual(c.execute('SELECT count(*) FROM invitation_access').fetchone()[0],0)
   self.assertRaises(server.Denied,access.unlock,issued['link'],issued['code'],'127.0.0.1')
+ def test_deleting_legacy_extra_event_preserves_main_event_media(self):
+  extra=copy.deepcopy(self.initial);extra['event']['id']='legacy-extra'
+  with self.db.connect() as c:c.execute('INSERT INTO events VALUES(?,?,?,?)',('legacy-extra',json.dumps(extra),1,server.now()))
+  media_dir=Path(self.tmp.name)/'private-media';media_dir.mkdir();portrait=media_dir/'portrait-1.jpg';portrait.write_bytes(b'portrait')
+  token='a'*40;http=server.ThreadingHTTPServer(('127.0.0.1',0),server.make_handler(self.db,token,{'127.0.0.1'}));thread=threading.Thread(target=http.serve_forever,daemon=True);thread.start()
+  try:
+   with mock.patch.dict(os.environ,{'TEMU_PRIVATE_MEDIA_DIR':str(media_dir)}):
+    req=urllib.request.Request(f'http://127.0.0.1:{http.server_port}/api/events/legacy-extra',method='DELETE',headers={'Authorization':'Bearer '+token,'X-Temu-Delete':'1'})
+    with urllib.request.urlopen(req) as response:self.assertTrue(json.load(response)['ok'])
+   self.assertEqual([event['id'] for event in self.db.events()],['wedding'])
+   self.assertEqual(portrait.read_bytes(),b'portrait')
+  finally:http.shutdown();http.server_close();thread.join()
  def test_api_auth_and_same_origin(self):
   token='a'*40;http=server.ThreadingHTTPServer(('127.0.0.1',0),server.make_handler(self.db,token,{'127.0.0.1'}));thread=threading.Thread(target=http.serve_forever,daemon=True);thread.start();url=f'http://127.0.0.1:{http.server_port}'
   try:
