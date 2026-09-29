@@ -1,0 +1,8 @@
+**
+!server/
+!server/*.py
+!dist/
+!dist/**
+!deploy/
+!deploy/start.sh
+!Dockerfile

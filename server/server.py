@@ -1,0 +1,255 @@
+"""Temu local / self-hosted sync server. Python 3.10+, standard library only."""
+import argparse, copy, hashlib, hmac, json, os, re, secrets, sqlite3, threading, time
+from datetime import datetime, timezone
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+from pathlib import Path
+from urllib.parse import urlsplit
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+from guest_access import GuestAccess, Denied
+
+ROOT = Path(__file__).resolve().parents[1]
+MAX_BODY = 20 * 1024 * 1024
+
+def now(): return datetime.now(timezone.utc).isoformat()
+def encode(x): return json.dumps(x, ensure_ascii=False, separators=(',', ':'))
+def validate(s):
+    if not isinstance(s,dict) or s.get('version') != 1: raise ValueError('Format data tidak sesuai.')
+    e=s.get('event',{})
+    for k in ('id','name','date'):
+        if not isinstance(e.get(k),str) or len(e[k])>200: raise ValueError('Acara tidak valid.')
+    if 'invitationText' in e and (not isinstance(e['invitationText'],str) or len(e['invitationText'])>2000):raise ValueError('Teks undangan tidak valid.')
+    if 'wedding' in e:
+        if not isinstance(e['wedding'],dict):raise ValueError('Detail pernikahan tidak valid.')
+        for key,value in e['wedding'].items():
+            if key not in ('firstName','secondName','ceremonyTime','receptionTime','venue','address','mapsURL','publicOrigin') or not isinstance(value,str) or len(value)>500:raise ValueError('Detail pernikahan tidak valid.')
+        for key in ('mapsURL','publicOrigin'):
+            value=e['wedding'].get(key,'')
+            if value and (urlsplit(value).scheme!='https' or not urlsplit(value).netloc or urlsplit(value).username):raise ValueError('Tautan harus HTTPS.')
+    if not e['id'] or not isinstance(s.get('guests'),list) or len(s['guests'])>20000 or not isinstance(s.get('logs'),list): raise ValueError('Data tidak valid.')
+    if s.get('pin') is not None and (not isinstance(s['pin'],str) or len(s['pin'])>128): raise ValueError('PIN tidak valid.')
+    ids=set();codes=set()
+    for g in s['guests']:
+        for k in ('id','code','name','group'):
+            if not isinstance(g.get(k),str) or len(g[k])>500: raise ValueError('Tamu tidak valid.')
+        if not g['id'] or not g['code'] or not g['name'].strip() or type(g.get('active')) is not bool: raise ValueError('Tamu tidak valid.')
+        if type(g.get('quota')) is not int or not 1<=g['quota']<=1000 or type(g.get('arrived')) is not int or not 0<=g['arrived']<=g['quota']: raise ValueError('Kuota tidak valid.')
+        if g['id'] in ids or g['code'] in codes: raise ValueError('Kode / ID tamu duplikat.')
+        if 'phone' in g and (not isinstance(g['phone'],str) or (g['phone'] and not re.fullmatch(r'[1-9]\d{7,14}',g['phone']))):raise ValueError('Nomor WhatsApp tidak valid.')
+        ids.add(g['id']);codes.add(g['code'])
+    logids=set()
+    for l in s['logs']:
+        if not isinstance(l,dict) or not isinstance(l.get('id'),str) or l['id'] in logids or l.get('guest') not in ids or type(l.get('count')) is not int or not isinstance(l.get('at'),str): raise ValueError('Riwayat tidak valid.')
+        datetime.fromisoformat(l['at'].replace('Z','+00:00'));logids.add(l['id'])
+    return s
+
+def apply(state,op,event):
+    if not isinstance(op,dict) or not isinstance(op.get('id'),str) or not 1<=len(op['id'])<=100 or op.get('event')!=event: raise ValueError('Operasi tidak valid.')
+    if op.get('kind')=='bootstrap':
+        if state is not None: raise ValueError('Acara sudah ada. Pilih salinan server atau tinjau cadangan lokal.')
+        result=validate(copy.deepcopy(op.get('state')))
+        if result['event']['id']!=event: raise ValueError('Acara tidak cocok.')
+        return result
+    if op.get('kind')!='change' or state is None: raise ValueError('Acara belum tersedia di server.')
+    result=copy.deepcopy(state)
+    meta=op.get('meta')
+    if meta:
+        if {'event':state['event'],'pin':state['pin']}!=meta.get('before'): raise ValueError('Pengaturan berubah di perangkat lain.')
+        result.update(meta['after'])
+    changes=op.get('changes');logs=op.get('logs')
+    if not isinstance(changes,list) or not isinstance(logs,list): raise ValueError('Perubahan tidak valid.')
+    for c in changes:
+        current=next((g for g in result['guests'] if g['id']==c.get('id')),None)
+        if current!=c.get('before'): raise ValueError('Undangan berubah di perangkat lain; periksa kedatangan sebelum mengulang.')
+        result['guests']=[g for g in result['guests'] if g['id']!=c['id']]
+        if c.get('after') is not None:
+            if c['after'].get('id')!=c['id']: raise ValueError('ID tamu berubah.')
+            result['guests'].append(c['after'])
+    result['logs'].extend(logs)
+    if result['event']['id']!=event: raise ValueError('ID acara tidak boleh berubah.')
+    return validate(result)
+
+class ClosingConnection(sqlite3.Connection):
+    def __exit__(self,*args):
+        try:return super().__exit__(*args)
+        finally:self.close()
+
+class Database:
+    def __init__(self,directory,backup_dir=None):
+        self.directory=Path(directory);self.directory.mkdir(parents=True,exist_ok=True,mode=0o700)
+        self.path=self.directory/'temu.sqlite3';self.backup_dir=Path(backup_dir) if backup_dir else self.directory/'backups'
+        self.backup_dir.mkdir(parents=True,exist_ok=True,mode=0o700);self.lock=threading.RLock();self.last_backup=0;self.backup_error=None
+        with self.connect() as c:
+            c.executescript('''PRAGMA journal_mode=WAL;
+            CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,state TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0,updated TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS operations(event TEXT NOT NULL,id TEXT NOT NULL,fingerprint TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY(event,id));
+            ''')
+        os.chmod(self.path,0o600)
+    def connect(self):
+        c=sqlite3.connect(self.path,timeout=20,factory=ClosingConnection);c.execute('PRAGMA synchronous=FULL');return c
+    def backup(self,force=False):
+        with self.lock:
+            if not force and time.time()-self.last_backup<60:return
+            target=self.backup_dir/('temu-'+str(time.time_ns())+'.sqlite3');temp=target.with_suffix('.tmp')
+            try:
+                with self.connect() as source,sqlite3.connect(temp,factory=ClosingConnection) as destination:source.backup(destination)
+                os.chmod(temp,0o600);os.replace(temp,target)
+                for old in sorted(self.backup_dir.glob('temu-*.sqlite3'))[:-48]:old.unlink()
+                self.last_backup=time.time();self.backup_error=None
+            except Exception as e:
+                self.backup_error='Cadangan server gagal: '+type(e).__name__
+                if temp.exists():temp.unlink()
+    def sync(self,body):
+        event=body.get('event');ops=body.get('operations',[])
+        if not isinstance(event,str) or not 1<=len(event)<=200 or not isinstance(ops,list) or len(ops)>100:raise ValueError('Permintaan tidak valid.')
+        with self.lock,self.connect() as c:
+            c.execute('BEGIN IMMEDIATE');row=c.execute('SELECT state,revision FROM events WHERE id=?',(event,)).fetchone()
+            state=json.loads(row[0]) if row else None;revision=row[1] if row else 0;results=[];changed=False
+            for op in ops:
+                if not isinstance(op,dict) or not isinstance(op.get('id'),str):raise ValueError('ID operasi tidak valid.')
+                fingerprint=hashlib.sha256(encode(op).encode()).hexdigest()
+                previous=c.execute('SELECT fingerprint,result FROM operations WHERE event=? AND id=?',(event,op['id'])).fetchone()
+                if previous:
+                    if previous[0]!=fingerprint:raise ValueError('ID operasi sudah dipakai dengan isi berbeda.')
+                    results.append(json.loads(previous[1]));continue
+                try:
+                    state=apply(state,op,event);revision+=1;changed=True;result={'id':op['id'],'ok':True}
+                except (ValueError,KeyError,TypeError,AttributeError) as e:result={'id':op['id'],'ok':False,'reason':str(e)}
+                c.execute('INSERT INTO operations VALUES(?,?,?,?)',(event,op['id'],fingerprint,encode(result)));results.append(result)
+            if state is not None:
+                c.execute('INSERT INTO events VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,revision=excluded.revision,updated=excluded.updated',(event,encode(state),revision,now()))
+            c.commit()
+            if changed:self.backup()
+            return {'state':state,'revision':revision,'results':results,'backupAt':datetime.fromtimestamp(self.last_backup,timezone.utc).isoformat() if self.last_backup else None,'backupError':self.backup_error}
+    def events(self):
+        with self.connect() as c:return [{'id':r[0],'name':json.loads(r[1])['event']['name'],'updated':r[2]} for r in c.execute('SELECT id,state,updated FROM events ORDER BY updated DESC')]
+
+def make_handler(database,token,allowed_hosts):
+    guest_access=GuestAccess(database)
+    class Handler(SimpleHTTPRequestHandler):
+        def __init__(self,*args,**kwargs):super().__init__(*args,directory=str(ROOT/'dist'),**kwargs)
+        def log_message(self,fmt,*args):pass # Avoid logging credentials, QR values or guest data.
+        def end_headers(self):
+            self.send_header('X-Content-Type-Options','nosniff');self.send_header('Referrer-Policy','no-referrer');self.send_header('X-Frame-Options','DENY')
+            super().end_headers()
+        def safe_host(self):return self.headers.get('Host','').split(':')[0] in allowed_hosts
+        def authorized(self):
+            if not self.safe_host():return False
+            origin=self.headers.get('Origin')
+            if origin and urlsplit(origin).netloc!=self.headers.get('Host'):return False
+            if self.headers.get('Sec-Fetch-Site')=='cross-site':return False
+            return hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+token)
+        def reply(self,status,payload,cookie=None):
+            data=encode(payload).encode();self.send_response(status);self.send_header('Content-Type','application/json; charset=utf-8');self.send_header('Cache-Control','no-store');self.send_header('Content-Length',str(len(data)));
+            if cookie:self.send_header('Set-Cookie',cookie)
+            self.end_headers()
+            if self.command!='HEAD':self.wfile.write(data)
+        def guest_cookie(self,value,max_age=86400):
+            local=self.headers.get('Host','').split(':')[0] in ('localhost','127.0.0.1')
+            return f'temu_guest={value}; Path=/api/invite; HttpOnly; SameSite=Strict; Max-Age={max_age}'+('' if local else '; Secure')
+        def invite_body(self):
+            origin=self.headers.get('Origin')
+            if not self.safe_host() or self.headers.get('X-Temu-Invite')!='1' or self.headers.get('Sec-Fetch-Site')=='cross-site' or (origin and urlsplit(origin).netloc!=self.headers.get('Host')):raise Denied('Permintaan tidak diizinkan.')
+            size=int(self.headers.get('Content-Length','0'))
+            if not 0<size<=4096:raise ValueError('Permintaan tidak valid.')
+            self.connection.settimeout(15);body=json.loads(self.rfile.read(size))
+            if not isinstance(body,dict):raise ValueError('Permintaan tidak valid.')
+            return body
+        def serve_private_media(self,name):
+            guest_access.session(self.headers.get('Cookie',''))
+            if name not in ('portrait-1.jpg','portrait-2.jpg','portrait-3.jpg','film.mp4'):return self.reply(404,{'error':'Media tidak ditemukan.'})
+            path=Path(os.environ.get('TEMU_PRIVATE_MEDIA_DIR',str(ROOT/'private-media')))/name
+            if not path.is_file():return self.reply(404,{'error':'Media belum tersedia.'})
+            size=path.stat().st_size;start=0;end=size-1;status=200
+            value=self.headers.get('Range')
+            if value:
+                m=re.fullmatch(r'bytes=(\d*)-(\d*)',value)
+                if not m or not any(m.groups()):return self.reply(416,{'error':'Rentang tidak valid.'})
+                if not m[1]:start=max(0,size-int(m[2]))
+                else:start=int(m[1]);end=min(size-1,int(m[2])) if m[2] else size-1
+                if start>end or start>=size:return self.reply(416,{'error':'Rentang tidak valid.'})
+                status=206
+            self.send_response(status);self.send_header('Content-Type','video/mp4' if name.endswith('.mp4') else 'image/jpeg');self.send_header('Cache-Control','private, no-store');self.send_header('Cross-Origin-Resource-Policy','same-origin');self.send_header('Accept-Ranges','bytes');self.send_header('Content-Length',str(end-start+1))
+            if status==206:self.send_header('Content-Range',f'bytes {start}-{end}/{size}')
+            self.end_headers()
+            if self.command=='HEAD':return
+            try:
+                with path.open('rb') as f:
+                    f.seek(start);remaining=end-start+1
+                    while remaining:
+                        chunk=f.read(min(65536,remaining))
+                        if not chunk:break
+                        self.wfile.write(chunk);remaining-=len(chunk)
+            except (BrokenPipeError,ConnectionResetError):pass
+        def do_HEAD(self):return self.do_GET()
+        def do_GET(self):
+            if not self.safe_host():return self.reply(403,{'error':'Host tidak diizinkan.'})
+            path=urlsplit(self.path).path
+            if path.startswith('/api/invite/'):
+                try:
+                    if path=='/api/invite/view':return self.reply(200,guest_access.session(self.headers.get('Cookie','')))
+                    if path.startswith('/api/invite/media/'):return self.serve_private_media(path.rsplit('/',1)[-1])
+                except Denied:return self.reply(401,{'error':'Masukkan kode akses untuk membuka undangan.'})
+                return self.reply(404,{'error':'Tidak ditemukan.'})
+            if path.startswith('/api/'):
+                if not self.authorized():return self.reply(401,{'error':'Kunci server belum benar.'})
+                if path=='/api/events':return self.reply(200,{'events':database.events()})
+                return self.reply(404,{'error':'Tidak ditemukan.'})
+            if path in ('/invite','/invite/','/invite.html'):
+                data=(ROOT/'dist/invite.html').read_bytes();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.send_header('X-Robots-Tag','noindex, nofollow, noarchive');self.send_header('Content-Security-Policy',"default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");self.send_header('Content-Length',str(len(data)));self.end_headers()
+                if self.command!='HEAD':self.wfile.write(data)
+                return
+            return super().do_HEAD() if self.command=='HEAD' else super().do_GET()
+        def do_POST(self):
+            if self.path in ('/api/invite/unlock','/api/invite/logout'):
+                try:
+                    body=self.invite_body()
+                    if self.path.endswith('/unlock'):
+                        session=guest_access.unlock(body.get('link'),body.get('code'),self.client_address[0]);return self.reply(200,{'ok':True},self.guest_cookie(session))
+                    guest_access.logout(self.headers.get('Cookie',''));return self.reply(200,{'ok':True},self.guest_cookie('',0))
+                except Denied as e:return self.reply(403,{'error':str(e)})
+                except (ValueError,TypeError):return self.reply(400,{'error':'Permintaan tidak valid.'})
+            if self.path in ('/api/invite/admin/issue','/api/invite/admin/revoke','/api/invite/admin/preview'):
+                if not self.authorized():return self.reply(401,{'error':'Akses pengelola diperlukan.'})
+                try:
+                    body=self.invite_body();event=body.get('event');guest=body.get('guest')
+                    if not isinstance(event,str) or not isinstance(guest,str):raise ValueError('Undangan tidak valid.')
+                    if self.path.endswith('/preview'):return self.reply(200,{'ok':True},self.guest_cookie(guest_access.preview(event,guest),600))
+                    if self.path.endswith('/issue'):return self.reply(200,guest_access.issue(event,guest))
+                    guest_access.revoke(event,guest);return self.reply(200,{'ok':True})
+                except (ValueError,Denied) as e:return self.reply(400,{'error':str(e)})
+            if self.path=='/api/local-session':
+                origin=self.headers.get('Origin')
+                same_origin=not origin or urlsplit(origin).netloc==self.headers.get('Host')
+                if allowed_hosts <= {'localhost','127.0.0.1'} and self.client_address[0]=='127.0.0.1' and self.headers.get('Host','').split(':')[0] in ('localhost','127.0.0.1') and same_origin and self.headers.get('Sec-Fetch-Site')!='cross-site' and self.headers.get('X-Temu-Local')=='1':return self.reply(200,{'token':token})
+                return self.reply(403,{'error':'Hubungkan menggunakan kunci server.'})
+            if not self.authorized():return self.reply(401,{'error':'Kunci server belum benar.'})
+            if self.path!='/api/sync':return self.reply(404,{'error':'Tidak ditemukan.'})
+            try:
+                size=int(self.headers.get('Content-Length','0'))
+                if not 0<size<=MAX_BODY:return self.reply(413,{'error':'Permintaan terlalu besar.'})
+                self.connection.settimeout(20)
+                body=json.loads(self.rfile.read(size));result=database.sync(body);self.reply(200,result)
+            except (ValueError,TypeError,KeyError):self.reply(400,{'error':'Format sinkronisasi tidak valid.'})
+            except Exception:self.reply(503,{'error':'Penyimpanan server belum tersedia. Perubahan lokal tetap disimpan.'})
+    return Handler
+
+def main():
+    parser=argparse.ArgumentParser();parser.add_argument('--port',type=int,default=4173);parser.add_argument('--host',default='127.0.0.1');parser.add_argument('--data-dir',default=str(ROOT/'server-data'));parser.add_argument('--backup-dir');args=parser.parse_args()
+    os.umask(0o077);database=Database(args.data_dir,args.backup_dir)
+    token=os.environ.get('TEMU_SERVER_TOKEN');keypath=Path(args.data_dir)/'server-key.txt'
+    if not token:
+        if keypath.exists():token=keypath.read_text().strip()
+        else:token=secrets.token_urlsafe(32);keypath.write_text(token);os.chmod(keypath,0o600)
+    if len(token)<32:raise SystemExit('TEMU_SERVER_TOKEN minimal 32 karakter.')
+    hosts={'localhost','127.0.0.1',*filter(None,os.environ.get('TEMU_ALLOWED_HOSTS','').split(','))}
+    server=ThreadingHTTPServer((args.host,args.port),make_handler(database,token,hosts))
+    stop=threading.Event()
+    def backups():
+        while not stop.wait(300):database.backup(force=True)
+    database.backup(force=True);threading.Thread(target=backups,daemon=True).start()
+    print(f'Temu siap di http://localhost:{args.port}. Kunci koneksi tersedia di {keypath}',flush=True)
+    try:server.serve_forever()
+    except KeyboardInterrupt:pass
+    finally:stop.set();database.backup(force=True);server.server_close()
+if __name__=='__main__':main()
