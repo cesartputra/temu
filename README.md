@@ -103,17 +103,17 @@ Pustaka QR dibundel lokal: qrcode-generator 1.4.4 (MIT), jsQR 1.4.0 (Apache-2.0)
 1. Tambah/Ubah tamu dan isi **Nomor WhatsApp**. Nomor `08…` dinormalisasi menjadi `628…`; nomor internasional juga diterima. Kolom ini opsional agar undangan lama tetap bekerja.
 2. Buka **Pengaturan → Informasi acara → Teks undangan WhatsApp**. Gunakan `{nama}`, `{acara}`, `{tanggal}`, `{jumlah}`. Tambahkan alamat dan jam acara dalam teks sesuai kebutuhan.
 3. Pada Daftar tamu, tekan **WhatsApp** untuk meninjau nomor, QR, serta pesan. Pesan dapat disunting untuk pengiriman tersebut tanpa mengubah template umum.
-4. Pada perangkat yang mendukung berbagi berkas, **Bagikan QR + teks** membuka menu perangkat. Pilih WhatsApp dan penerima yang sesuai. Menu berbagi tidak dapat memilih nomor penerima secara otomatis; pastikan nomor tujuan yang ditampilkan cocok.
-5. Jika tidak tersedia, pilih **Unduh QR PNG**, lalu **Buka chat WhatsApp**. Chat menuju nomor tamu dengan teks terisi. Lampirkan PNG yang sudah diunduh sebelum menekan Kirim.
+4. Pilih **Unduh QR PNG** untuk menyimpan satu gambar QR.
+5. Pilih **Buka WhatsApp dengan teks**. Chat menuju nomor tamu dengan teks terisi. Lampirkan PNG tadi satu kali sebelum menekan Kirim. **Salin teks saja** tersedia bila ingin menempelkan pesan secara manual.
 6. Beberapa aplikasi/perangkat tidak meneruskan teks bersama gambar. Gunakan **Salin teks** lalu tempel sebagai pesan atau keterangan gambar.
 
 Nomor dan template ikut tersimpan offline, disinkronkan dan dicadangkan. CSV mendukung kolom opsional `telepon` setelah `nama,jumlah,kelompok`. CSV lama tetap dapat diimpor. Ekspor baru menyertakan `telepon`.
 
 Pembuatan PNG dan penyusunan undangan berjalan lokal. Membuka dan mengirim pesan WhatsApp memerlukan koneksi. Aplikasi tidak mengirim pesan otomatis, tidak mengklaim status terkirim/diterima, dan tidak mengirim massal. Tidak ada pesan yang dikirim selama pengujian pengembangan.
 
-Sumber perilaku integrasi: [WhatsApp Click to Chat](https://faq.whatsapp.com/5913398998672934) untuk nomor internasional dan draf teks; [Web Share API](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/share) untuk berbagi berkas dan teks melalui pilihan aplikasi perangkat. Tautan WhatsApp tidak melampirkan berkas lokal secara otomatis.
+Sumber perilaku integrasi: [WhatsApp Click to Chat](https://faq.whatsapp.com/5913398998672934) untuk nomor internasional dan draf teks. Tautan WhatsApp tidak melampirkan berkas lokal secara otomatis; QR PNG dilampirkan manual agar path lokal browser tidak masuk ke pesan dan gambar tidak terduplikasi.
 
-Pembaruan ini telah melewati 26 pengujian otomatis, termasuk normalisasi nomor, penyusunan tautan pesan, template, serta persistensi nomor dan template di server/cadangan. Pengiriman melalui aplikasi WhatsApp fisik belum diuji; dukungan berbagi file berbeda antarperangkat.
+Pengujian otomatis mencakup normalisasi nomor, penyusunan tautan pesan, template, serta persistensi nomor dan template di server/cadangan. Pengiriman melalui aplikasi WhatsApp fisik tetap perlu diperiksa oleh pengelola sebelum menekan Kirim.
 
 ## Undangan pernikahan publik — Reva & Cesar
 
