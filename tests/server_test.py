@@ -71,6 +71,51 @@ class ServerTests(unittest.TestCase):
   self.assertRaises(server.Denied,access.unlock,issued['link'],issued['code'],'127.0.0.1')
   stale=self.db.sync({'event':'wedding','operations':[change(self.initial)]})
   self.assertFalse(stale['results'][0]['ok']);self.assertEqual(stale['state']['guests'],[])
+ def test_reset_attendance_preserves_guests_qr_rsvp_wishes_and_links(self):
+  pin='8426';digest=hashlib.sha256(('wedding:'+pin).encode()).hexdigest()
+  current=self.db.sync({'event':'wedding','operations':[]})
+  with self.db.connect() as c:
+   state=current['state'];state['pin']=digest;state['guests'][0]['phone']='6281234567890'
+   c.execute('UPDATE events SET state=? WHERE id=?',(server.encode(state),'wedding'))
+  access=server.GuestAccess(self.db);issued=access.issue('wedding','g')
+  with self.db.connect() as c:
+   c.execute('INSERT INTO rsvps VALUES(?,?,?,?,?)',('wedding','g','attending',2,server.now()))
+   c.execute('INSERT INTO wishes VALUES(?,?,?,?)',('wedding','g','Semoga bahagia',server.now()))
+  checked=self.db.sync({'event':'wedding','operations':[change(state)]})
+  self.assertEqual(checked['state']['guests'][0]['arrived'],1)
+  self.assertRaises(ValueError,self.db.reset_attendance,'wedding',checked['revision'],'0000')
+  self.assertRaises(ValueError,self.db.reset_attendance,'wedding',checked['revision']+1,pin)
+  result=self.db.reset_attendance('wedding',checked['revision'],pin)
+  self.assertEqual(result['state']['guests'][0]['code'],'qr')
+  self.assertEqual(result['state']['guests'][0]['name'],'Tamu Uji')
+  self.assertEqual(result['state']['guests'][0]['arrived'],0)
+  self.assertEqual(result['state']['logs'],[])
+  self.assertEqual(result['state']['guestEpoch'],1)
+  with self.db.connect() as c:
+   for table in ('rsvps','wishes','invitation_access'):
+    self.assertEqual(c.execute(f'SELECT count(*) FROM {table} WHERE event=?',('wedding',)).fetchone()[0],1)
+  self.assertTrue(access.unlock(issued['link'],issued['code'],'127.0.0.1'))
+  stale=self.db.sync({'event':'wedding','operations':[change(checked['state'])]})
+  self.assertFalse(stale['results'][0]['ok']);self.assertEqual(stale['state']['guests'][0]['arrived'],0)
+ def test_reset_attendance_endpoint_requires_auth_and_pin(self):
+  pin='8426';digest=hashlib.sha256(('wedding:'+pin).encode()).hexdigest()
+  with self.db.connect() as c:
+   state=self.db.sync({'event':'wedding','operations':[]})['state'];state['pin']=digest
+   c.execute('UPDATE events SET state=? WHERE id=?',(server.encode(state),'wedding'))
+  token='a'*40;http=server.ThreadingHTTPServer(('127.0.0.1',0),server.make_handler(self.db,token,{'127.0.0.1'}));thread=threading.Thread(target=http.serve_forever,daemon=True);thread.start()
+  try:
+   url=f'http://127.0.0.1:{http.server_port}/api/events/wedding/attendance/reset'
+   headers={'Content-Type':'application/json','X-Temu-Reset':'1'}
+   req=urllib.request.Request(url,data=json.dumps({'revision':1,'pin':pin}).encode(),headers=headers)
+   with self.assertRaises(urllib.error.HTTPError) as error:urllib.request.urlopen(req)
+   self.assertEqual(error.exception.code,401);error.exception.close()
+   headers['Authorization']='Bearer '+token
+   bad=urllib.request.Request(url,data=json.dumps({'revision':1,'pin':'1111'}).encode(),headers=headers)
+   with self.assertRaises(urllib.error.HTTPError) as error:urllib.request.urlopen(bad)
+   self.assertEqual(error.exception.code,409);error.exception.close()
+   req=urllib.request.Request(url,data=json.dumps({'revision':1,'pin':pin}).encode(),headers=headers)
+   with urllib.request.urlopen(req) as response:self.assertEqual(json.load(response)['state']['guests'][0]['code'],'qr')
+  finally:http.shutdown();http.server_close();thread.join()
  def test_deleting_legacy_extra_event_preserves_main_event_media(self):
   extra=copy.deepcopy(self.initial);extra['event']['id']='legacy-extra'
   with self.db.connect() as c:c.execute('INSERT INTO events VALUES(?,?,?,?)',('legacy-extra',json.dumps(extra),1,server.now()))

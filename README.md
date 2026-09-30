@@ -36,6 +36,8 @@ Pada sesi pengembangan ini server dijalankan dengan `--data-dir work/temu-server
 6. Jumlah hadir memakai keadaan server setelah sinkronisasi. Pengelola memeriksa konflik dan, bila perlu, membuat koreksi/check-in baru setelah memverifikasi orang yang hadir. Menandai konflik diperiksa tidak otomatis menambah kehadiran.
 7. Selama perangkat tidak terhubung, aplikasi **tidak bisa mencegah penerimaan orang yang sama di dua pintu secara langsung**. Konflik dapat diketahui setelah tersambung. Kedatangan sah yang bersamaan untuk satu keluarga juga dapat memerlukan pemeriksaan.
 
+Di **Daftar tamu**, pengelola dapat memilih **Reset kehadiran** untuk mengembalikan jumlah hadir semua tamu ke nol dan mengosongkan riwayat check-in. Sambungkan server, selesaikan antrean dan konflik, lalu masukkan kembali PIN pengelola. Nama, kuota, QR, tautan undangan, RSVP, dan doa tidak berubah. Perangkat lain menerima reset saat tersambung; check-in lama yang belum sempat tersinkron tidak akan diterapkan. Cadangan server baru dibuat setelah reset, sedangkan cadangan lokal sebelum reset tidak dapat dipulihkan ke acara yang sama.
+
 Server memakai transaksi SQLite dan daftar ID operasi persisten. Antrean yang dibuat ketika permintaan jaringan sedang berlangsung dipertahankan dan diperiksa terhadap keadaan server. Operasi bertentangan disimpan sebagai konflik; operasi tidak terkait tetap dapat diterapkan.
 
 ## Cadangan otomatis

@@ -135,6 +135,25 @@ class Database:
             except OSError:cleanup_error='Cadangan lama belum seluruhnya terhapus; periksa folder cadangan server.'
             self.backup(force=True)
             return {'ok':True,'state':state,'revision':revision,'backupAt':datetime.fromtimestamp(self.last_backup,timezone.utc).isoformat() if self.last_backup else None,'backupError':cleanup_error or self.backup_error}
+    def reset_attendance(self,event,expected_revision,pin):
+        if type(expected_revision) is not int or expected_revision<0 or not isinstance(pin,str) or not re.fullmatch(r'\d{4,12}',pin):raise ValueError('PIN atau versi data tidak valid.')
+        with self.lock,self.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            row=c.execute('SELECT state,revision FROM events WHERE id=?',(event,)).fetchone()
+            if not row:raise ValueError('Acara tidak ditemukan.')
+            state=validate(json.loads(row[0]));revision=row[1]
+            if not state.get('pin'):raise ValueError('Atur PIN pengelola sebelum mereset kehadiran.')
+            digest=hashlib.sha256((event+':'+pin).encode()).hexdigest()
+            if not hmac.compare_digest(digest,state['pin']):raise ValueError('PIN tidak sesuai.')
+            if revision!=expected_revision:raise ValueError('Data berubah. Sinkronkan lalu ulangi reset.')
+            for guest in state['guests']:guest['arrived']=0
+            state['logs']=[];state['guestEpoch']=state.get('guestEpoch',0)+1
+            validate(state);revision+=1
+            c.execute('UPDATE events SET state=?,revision=?,updated=? WHERE id=?',(encode(state),revision,now(),event))
+            c.execute('DELETE FROM operations WHERE event=?',(event,))
+            c.commit()
+            self.backup(force=True)
+            return {'ok':True,'state':state,'revision':revision,'backupAt':datetime.fromtimestamp(self.last_backup,timezone.utc).isoformat() if self.last_backup else None,'backupError':self.backup_error}
     def sync(self,body):
         event=body.get('event');ops=body.get('operations',[])
         if not isinstance(event,str) or not 1<=len(event)<=200 or not isinstance(ops,list) or len(ops)>100:raise ValueError('Permintaan tidak valid.')
@@ -383,6 +402,16 @@ def make_handler(database,token,allowed_hosts):
                 return
             return super().do_HEAD() if self.command=='HEAD' else super().do_GET()
         def do_POST(self):
+            match=re.fullmatch(r'/api/events/([A-Za-z0-9_-]{1,200})/attendance/reset',urlsplit(self.path).path)
+            if match:
+                if not self.authorized() or self.headers.get('X-Temu-Reset')!='1':return self.reply(401,{'error':'Akses pengelola diperlukan.'})
+                try:
+                    size=int(self.headers.get('Content-Length','0'))
+                    if not 0<size<=1024:raise ValueError('Permintaan tidak valid.')
+                    body=json.loads(self.rfile.read(size))
+                    return self.reply(200,database.reset_attendance(match.group(1),body.get('revision'),body.get('pin')))
+                except (ValueError,TypeError,KeyError) as error:return self.reply(409,{'error':str(error)})
+                except Exception:return self.reply(503,{'error':'Kehadiran belum dapat direset. Coba lagi.'})
             if self.path in ('/api/invite/guest','/api/invite/rsvp','/api/invite/wish'):
                 try:
                     body=self.invite_body();guest=body.get('guest');key=body.get('key')

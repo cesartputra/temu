@@ -50,6 +50,8 @@ Instalasi ini hanya menerima satu acara aktif. Dari perangkat baru, isi kunci la
 
 Pengelola dapat menghapus tamu dari formulir Ubah. Jika tamu pernah check-in, nama, nomor, dan QR diganti dengan catatan anonim agar jumlah hadir tetap dapat diaudit. QR masuk tamu yang dihapus tidak lagi berlaku setelah sinkronisasi. Tombol **Hapus acara** di Pengaturan hanya tersedia saat server terhubung dan antrean perubahan kosong; tindakan ini menghapus acara, daftar tamu, akses lama, foto/video/musik, serta cadangan otomatis pada server. Buat cadangan terenkripsi yang ingin disimpan sebelum menghapus acara.
 
+Tombol **Reset kehadiran** di Daftar tamu mengosongkan jumlah hadir dan riwayat check-in semua tamu setelah sinkronisasi dan pengisian ulang PIN. Data tamu, QR, RSVP, dan doa tetap ada. Check-in yang tertunda pada perangkat offline sebelum reset tidak akan diterapkan saat perangkat itu tersambung.
+
 ## 5. Pemeriksaan sebelum membagikan
 
 - Buat tamu uji, sinkronkan, restart/redeploy, lalu pastikan data masih ada dari browser/perangkat lain.
