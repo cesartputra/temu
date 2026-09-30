@@ -73,7 +73,7 @@ Server bawaan hanya mendengarkan `127.0.0.1`, sehingga aman untuk pengembangan l
 4. Atur `TEMU_SERVER_TOKEN` dengan rahasia acak minimal 32 karakter melalui pengelola rahasia host, atau gunakan kunci yang dihasilkan dalam direktori privat.
 5. Masukkan kunci tersebut pada perangkat yang dipercaya. Permintaan API membawa bearer token dan tidak dicache service worker. Tidak ada CORS lintas asal.
 
-Kode ini menyertakan server mandiri Python dan digunakan oleh instalasi Helipod acara Cesar & Revalina. Domain aktif dan status deploy tetap perlu diperiksa di Helipod; hosting statis saja tidak menjalankan server Python ini.
+Kode ini menyertakan server mandiri Python dan digunakan oleh instalasi Helipod acara Reva & Cesar. Domain aktif dan status deploy tetap perlu diperiksa di Helipod; hosting statis saja tidak menjalankan server Python ini.
 
 ## Struktur kode
 
@@ -115,7 +115,7 @@ Sumber perilaku integrasi: [WhatsApp Click to Chat](https://faq.whatsapp.com/591
 
 Pembaruan ini telah melewati 26 pengujian otomatis, termasuk normalisasi nomor, penyusunan tautan pesan, template, serta persistensi nomor dan template di server/cadangan. Pengiriman melalui aplikasi WhatsApp fisik belum diuji; dukungan berbagi file berbeda antarperangkat.
 
-## Undangan pernikahan publik — Cesar & Revalina
+## Undangan pernikahan publik — Reva & Cesar
 
 Halaman `https://forevarwithcesar.helipod.app/invite` terbuka untuk umum tanpa kode masuk. Halaman menampilkan video sampul yang diputar otomatis tanpa suara dan berulang, musik latar dari berkas yang diberikan pengguna, potret, tanggal 21 November 2026, jadwal akad/resepsi yang masih akan diumumkan, Steikhaus Bandung, dan tautan peta. Browser dapat menolak putar otomatis musik bersuara; tombol **Putar musik** selalu tersedia. Desain memakai warna gading, arang, dan emas hangat.
 

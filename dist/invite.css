@@ -10,3 +10,16 @@
 .hero-countdown-units small{margin-top:11px;font-size:.58rem;letter-spacing:.18em}
 .countdown-separator{font:2.25rem/1 Georgia,'Times New Roman',serif;color:var(--gold)}
 @media(max-width:760px){.hero-countdown{color:#fff}.countdown-caption{color:#e0c299}.countdown-separator{color:#dfbf91}.hero-countdown-units strong{font-size:clamp(2rem,9vw,2.8rem)}.cover-place{margin-bottom:25px}}
+.hero-countdown{width:min(100%,370px)}
+.hero-countdown-units{gap:clamp(2px,1vw,8px)}
+.hero-countdown-units>span:not(.countdown-separator){min-width:0;flex:1}
+.hero-countdown-units strong{font-size:clamp(1.75rem,3.6vw,3.1rem)}
+.hero-countdown-units small{letter-spacing:.12em}
+.confetti-layer{position:fixed;inset:0;z-index:100;overflow:hidden;pointer-events:none}
+.confetti-piece{position:absolute;left:var(--x);top:-24px;width:9px;height:15px;opacity:0;transform:rotate(0deg);animation:confetti-fall var(--duration) linear var(--delay) 2}
+.confetti-piece:nth-child(3n){border-radius:50%;width:8px;height:8px}
+@keyframes confetti-fall{0%{opacity:0;transform:translate3d(0,-10vh,0) rotate(0deg)}8%{opacity:.9}90%{opacity:.9}100%{opacity:0;transform:translate3d(var(--drift),110vh,0) rotate(680deg)}}
+@media(max-width:760px){.hero-countdown-units strong{font-size:clamp(1.7rem,7.5vw,2.5rem)}.hero-countdown-units small{font-size:.51rem;letter-spacing:.08em}.countdown-separator{font-size:1.7rem}}
+@media(prefers-reduced-motion:reduce){.confetti-layer{display:none}}
+@media(min-width:761px){.music-toggle{left:20px;right:auto}.film-caption{bottom:76px}}
+@media(max-width:390px){.hero-countdown-units strong{font-size:clamp(1.6rem,8vw,2.2rem)}.hero-countdown-units small{font-size:.5rem}}

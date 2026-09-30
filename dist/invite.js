@@ -11,25 +11,42 @@ document.addEventListener('pointerdown',event=>{if(!event.target.closest('#music
 document.addEventListener('keydown',()=>{if(document.activeElement!==musicToggle&&music.paused)playMusic();},{once:true});
 function safeMap(value){try{const url=new URL(value);return url.protocol==='https:'&&['maps.app.goo.gl','www.google.com','google.com','maps.google.com'].includes(url.hostname)?url.href:null;}catch{return null;}}
 function dateText(raw,options){if(!/^\d{4}-\d{2}-\d{2}$/.test(raw||''))return 'Tanggal akan diinformasikan';return new Date(raw+'T12:00:00').toLocaleDateString('id-ID',options);}
-let countdownTimer;
+let countdownTimer,confettiShown=false;
+function celebrate(){
+  if(confettiShown||window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)return;
+  confettiShown=true;
+  const layer=document.createElement('div');layer.className='confetti-layer';layer.setAttribute('aria-hidden','true');
+  const colors=['#e8c69d','#f5e9d6','#a2453c','#bd9c72','#fff9ee'];
+  for(let i=0;i<32;i++){
+    const piece=document.createElement('span');piece.className='confetti-piece';
+    piece.style.setProperty('--x',`${Math.random()*100}%`);
+    piece.style.setProperty('--delay',`${Math.random()*4}s`);
+    piece.style.setProperty('--duration',`${4+Math.random()*4}s`);
+    piece.style.setProperty('--drift',`${Math.random()*160-80}px`);
+    piece.style.backgroundColor=colors[i%colors.length];layer.append(piece);
+  }
+  document.body.append(layer);setTimeout(()=>layer.remove(),12000);
+}
 function countdown(raw){
   if(!/^\d{4}-\d{2}-\d{2}$/.test(raw||''))return;
   clearInterval(countdownTimer);
   const target=new Date(raw+'T00:00:00+07:00').getTime();
   function render(){
     const remaining=Math.max(0,target-Date.now());
-    const totalMinutes=Math.ceil(remaining/60000);
-    const days=Math.floor(totalMinutes/1440);
-    const hours=Math.floor(totalMinutes%1440/60);
-    const minutes=totalMinutes%60;
+    const totalSeconds=Math.ceil(remaining/1000);
+    const days=Math.floor(totalSeconds/86400);
+    const hours=Math.floor(totalSeconds%86400/3600);
+    const minutes=Math.floor(totalSeconds%3600/60);
+    const seconds=totalSeconds%60;
     $('#hero-days').textContent=String(days);
     $('#hero-hours').textContent=String(hours).padStart(2,'0');
     $('#hero-minutes').textContent=String(minutes).padStart(2,'0');
+    $('#hero-seconds').textContent=String(seconds).padStart(2,'0');
     $('#countdown').textContent=remaining>0?days+' hari menuju hari bahagia':'Hari bahagia telah tiba';
-    if(!remaining)clearInterval(countdownTimer);
+    if(!remaining){clearInterval(countdownTimer);celebrate();}
   }
   render();
-  if(target>Date.now())countdownTimer=setInterval(render,15000);
+  if(target>Date.now())countdownTimer=setInterval(render,1000);
 }
 async function invitePost(path,payload){const response=await fetch('/api/invite/'+path,{method:'POST',headers:{'Content-Type':'application/json','X-Temu-Invite':'1'},body:JSON.stringify(payload),cache:'no-store',signal:AbortSignal.timeout(12000)});const data=await response.json();if(!response.ok)throw Error(data.error||'Permintaan belum berhasil.');return data;}
 function recipient(guest){return guest.name+(guest.quota===2?' & Pasangan':guest.quota>2?' & Keluarga':'');}
@@ -59,5 +76,5 @@ $('#rsvp-form').addEventListener('change',()=>{$('#rsvp-count-wrap').hidden=$('#
 $('#rsvp-form').addEventListener('submit',async event=>{event.preventDefault();if(!personal)return;const status=$('#rsvp-form input[name="status"]:checked')?.value,count=status==='attending'?Number($('#rsvp-count').value):0,button=$('#rsvp-form button[type=submit]');button.disabled=true;try{const info=await invitePost('rsvp',{...personal,status,count});$('#rsvp-status').textContent=info.rsvp.status==='attending'?'Terima kasih! Kehadiran '+info.rsvp.count+' orang sudah dikonfirmasi.':'Konfirmasi belum bisa hadir telah tersimpan. Terima kasih sudah memberi kabar.';}catch(error){$('#rsvp-status').textContent=error.message;}finally{button.disabled=false;}});
 $('#wish-form').addEventListener('submit',async event=>{event.preventDefault();if(!personal)return;const button=$('#wish-form button[type=submit]');button.disabled=true;try{await invitePost('wish',{...personal,message:$('#wish-message').value});$('#wish-status').textContent='Doa Anda tersimpan. Terima kasih.';await loadWishes();}catch(error){$('#wish-status').textContent=error.message;}finally{button.disabled=false;}});
 async function loadWishes(){try{const response=await fetch('/api/invite/wishes',{cache:'no-store',signal:AbortSignal.timeout(12000)}),data=await response.json();if(!response.ok)throw Error(data.error||'Doa belum dapat dimuat.');$('#wish-list').innerHTML=data.wishes.length?data.wishes.map(wish=>'<article class="wish-card"><strong>'+safeText(wish.name)+'</strong><time>'+safeText(new Date(wish.updated).toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'}))+'</time><p>'+safeText(wish.message)+'</p></article>').join(''):'<p>Belum ada doa. Jadilah yang pertama mengirimkan ucapan hangat.</p>';}catch(error){$('#wish-list').textContent=error.message;}}
-async function loadInvitation(){try{const response=await fetch('/api/invite/public',{cache:'no-store',signal:AbortSignal.timeout(12000)});const data=await response.json();if(!response.ok||!data.event)throw Error(data.error||'Undangan belum tersedia.');const event=data.event,w=event.wedding||{};const first=w.firstName||'Cesar',second=w.secondName||'Revalina';$('#first-name').textContent=first;$('#second-name').textContent=second;$('#signature').textContent=first+' & '+second;$('#closing-names').textContent=first+' & '+second;$('#cover-date').textContent=dateText(event.date,{day:'numeric',month:'long',year:'numeric'});$('#event-date').textContent=dateText(event.date,{weekday:'long',day:'numeric',month:'long',year:'numeric'});$('#cover-venue').textContent=w.venue||'Tempat akan diinformasikan';$('#venue').textContent=w.venue||'Tempat akan diinformasikan';$('#address').textContent=w.address||'Bandung, Jawa Barat';$('#ceremony-time').textContent=w.ceremonyTime||'Waktu akan diinformasikan';$('#reception-time').textContent=w.receptionTime||'Waktu akan diinformasikan';const map=safeMap(w.mapsURL);$('#maps-link').hidden=!map;if(map)$('#maps-link').href=map;countdown(event.date);document.title=first+' & '+second+' — Undangan Pernikahan';$('#load-error').hidden=true;const video=$('#hero-video');video.src='/api/invite/public-media/film.mp4';const params=new URLSearchParams(location.hash.slice(1)),guest=params.get('g'),key=params.get('k');if(guest||key){if(!guest||!key)throw Error('Tautan tamu tidak lengkap.');personal={guest,key};const info=await invitePost('guest',personal);showPersonal(info);}else{$('#invitation').hidden=false;video.play().catch(()=>{});$('#rsvp-intro').textContent='Buka tautan unik yang dikirimkan kepada Anda untuk mengonfirmasi kehadiran.';$('#wish-status').textContent='Kirim doa tersedia melalui tautan unik tamu.';}playMusic();loadWishes();}catch(error){$('#invitation').hidden=true;$('#guest-cover').hidden=true;$('#error-message').textContent=error.message||'Periksa koneksi dan coba lagi.';$('#load-error').hidden=false;}}
+async function loadInvitation(){try{const response=await fetch('/api/invite/public',{cache:'no-store',signal:AbortSignal.timeout(12000)});const data=await response.json();if(!response.ok||!data.event)throw Error(data.error||'Undangan belum tersedia.');const event=data.event,w=event.wedding||{};const legacy=w.firstName==='Cesar'&&w.secondName==='Revalina',first=legacy?'Reva':w.firstName||'Reva',second=legacy?'Cesar':w.secondName||'Cesar';$('#first-name').textContent=first;$('#second-name').textContent=second;$('#signature').textContent=first+' & '+second;$('#closing-names').textContent=first+' & '+second;$('#cover-date').textContent=dateText(event.date,{day:'numeric',month:'long',year:'numeric'});$('#event-date').textContent=dateText(event.date,{weekday:'long',day:'numeric',month:'long',year:'numeric'});$('#cover-venue').textContent=w.venue||'Tempat akan diinformasikan';$('#venue').textContent=w.venue||'Tempat akan diinformasikan';$('#address').textContent=w.address||'Bandung, Jawa Barat';$('#ceremony-time').textContent=w.ceremonyTime||'Waktu akan diinformasikan';$('#reception-time').textContent=w.receptionTime||'Waktu akan diinformasikan';const map=safeMap(w.mapsURL);$('#maps-link').hidden=!map;if(map)$('#maps-link').href=map;countdown(event.date);document.title=first+' & '+second+' — Undangan Pernikahan';$('#load-error').hidden=true;const video=$('#hero-video');video.src='/api/invite/public-media/film.mp4';const params=new URLSearchParams(location.hash.slice(1)),guest=params.get('g'),key=params.get('k');if(guest||key){if(!guest||!key)throw Error('Tautan tamu tidak lengkap.');personal={guest,key};const info=await invitePost('guest',personal);showPersonal(info);}else{$('#invitation').hidden=false;video.play().catch(()=>{});$('#rsvp-intro').textContent='Buka tautan unik yang dikirimkan kepada Anda untuk mengonfirmasi kehadiran.';$('#wish-status').textContent='Kirim doa tersedia melalui tautan unik tamu.';}playMusic();loadWishes();}catch(error){$('#invitation').hidden=true;$('#guest-cover').hidden=true;$('#error-message').textContent=error.message||'Periksa koneksi dan coba lagi.';$('#load-error').hidden=false;}}
 $('#retry').addEventListener('click',loadInvitation);loadInvitation();

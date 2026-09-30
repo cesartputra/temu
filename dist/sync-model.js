@@ -8,11 +8,12 @@ function operation(before,after){
  for(const g of after.guests)if(!same(old.get(g.id)||null,g))changes.push({id:g.id,before:old.get(g.id)||null,after:g});
  for(const g of before.guests)if(!after.guests.some(x=>x.id===g.id))changes.push({id:g.id,before:g,after:null});
  const known=new Set(before.logs.map(l=>l.id));
- return {id:crypto.randomUUID(),kind:'change',event:after.event.id,meta:same(meta(before),meta(after))?null:{before:meta(before),after:meta(after)},changes,logs:after.logs.filter(l=>!known.has(l.id))};
+ return {id:crypto.randomUUID(),kind:'change',event:after.event.id,guestEpoch:before.guestEpoch||0,meta:same(meta(before),meta(after))?null:{before:meta(before),after:meta(after)},changes,logs:after.logs.filter(l=>!known.has(l.id))};
 }
 function apply(state,op){
  if(op.kind==='bootstrap'){if(state)throw Error('Acara sudah ada di server.');return structuredClone(op.state);}
  if(!state||state.event.id!==op.event)throw Error('Acara tidak cocok.');
+ if((op.guestEpoch||0)!==(state.guestEpoch||0))throw Error('Daftar tamu telah dibersihkan. Sinkronkan sebelum mengubahnya.');
  const next=structuredClone(state);
  if(op.meta){if(!same(meta(state),op.meta.before))throw Error('Pengaturan acara berubah di perangkat lain.');next.event=op.meta.after.event;next.pin=op.meta.after.pin;}
  for(const c of op.changes){const current=next.guests.find(g=>g.id===c.id)||null;if(!same(current,c.before))throw Error('Undangan '+(c.after?.name||current?.name||c.id)+' berubah di perangkat lain.');next.guests=next.guests.filter(g=>g.id!==c.id);if(c.after)next.guests.push(structuredClone(c.after));}

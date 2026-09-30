@@ -42,7 +42,7 @@ Buka domain HTTPS → Pengaturan → masukkan kunci server yang sama. Pairing ot
 
 Ekspor cadangan terenkripsi dari aplikasi lokal dan pulihkan di aplikasi domain baru melalui fitur pemulihan cadangan. Selesaikan antrean sinkronisasi sebelum mengganti acara. Periksa nama acara, tanggal, jumlah tamu, nomor, dan kode QR; jangan membuat ulang tamu yang sudah punya QR. Simpan salinan lokal sampai semua pemeriksaan selesai. Undangan digital memakai tautan publik `/invite`; QR masuk tetap dikelola per tamu.
 
-Isi Pengaturan → Alamat undangan publik HTTPS dengan origin yang sama, misalnya `https://undangan.domain-anda.id`. Pastikan acara Cesar & Revalina, 21 November 2026, waktu akad/resepsi TBA, Steikhaus Bandung, serta link Maps yang diberikan sudah benar. Sinkronkan, lalu bagikan tautan publik `/invite` melalui daftar tamu. Kirim QR masuk per tamu lewat alur WhatsApp pengelola.
+Isi Pengaturan → Alamat undangan publik HTTPS dengan origin yang sama, misalnya `https://undangan.domain-anda.id`. Pastikan acara Reva & Cesar, 21 November 2026, waktu akad/resepsi TBA, Steikhaus Bandung, serta link Maps yang diberikan sudah benar. Sinkronkan, lalu bagikan tautan publik `/invite` melalui daftar tamu. Kirim QR masuk per tamu lewat alur WhatsApp pengelola.
 
 Perangkat petugas berikutnya: buka domain yang sama, masukkan kunci server, pilih **Buka acara saya dari server** dan acara yang sudah dimigrasikan.
 

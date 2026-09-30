@@ -27,6 +27,7 @@ def validate(s):
             value=e['wedding'].get(key,'')
             if value and (urlsplit(value).scheme!='https' or not urlsplit(value).netloc or urlsplit(value).username):raise ValueError('Tautan harus HTTPS.')
     if not e['id'] or not isinstance(s.get('guests'),list) or len(s['guests'])>20000 or not isinstance(s.get('logs'),list): raise ValueError('Data tidak valid.')
+    if type(s.get('guestEpoch',0)) is not int or s.get('guestEpoch',0)<0:raise ValueError('Versi daftar tamu tidak valid.')
     if s.get('pin') is not None and (not isinstance(s['pin'],str) or len(s['pin'])>128): raise ValueError('PIN tidak valid.')
     ids=set();codes=set()
     for g in s['guests']:
@@ -52,6 +53,7 @@ def apply(state,op,event):
         if result['event']['id']!=event: raise ValueError('Acara tidak cocok.')
         return result
     if op.get('kind')!='change' or state is None: raise ValueError('Acara belum tersedia di server.')
+    if op.get('guestEpoch',0)!=state.get('guestEpoch',0):raise ValueError('Daftar tamu telah dibersihkan di perangkat lain. Muat ulang data sebelum mengubahnya.')
     result=copy.deepcopy(state)
     meta=op.get('meta')
     if meta:
@@ -105,6 +107,34 @@ class Database:
             except Exception as e:
                 self.backup_error='Cadangan server gagal: '+type(e).__name__
                 if temp.exists():temp.unlink()
+    def clear_guests(self,event,expected_revision,pin):
+        if type(expected_revision) is not int or expected_revision<0 or not isinstance(pin,str) or not re.fullmatch(r'\d{4,12}',pin):raise ValueError('PIN atau versi data tidak valid.')
+        with self.lock,self.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            row=c.execute('SELECT state,revision FROM events WHERE id=?',(event,)).fetchone()
+            if not row:raise ValueError('Acara tidak ditemukan.')
+            state=validate(json.loads(row[0]));revision=row[1]
+            if not state.get('pin'):raise ValueError('Atur PIN pengelola sebelum menghapus seluruh tamu.')
+            digest=hashlib.sha256((event+':'+pin).encode()).hexdigest()
+            if not hmac.compare_digest(digest,state['pin']):raise ValueError('PIN tidak sesuai.')
+            if revision!=expected_revision:raise ValueError('Daftar berubah. Sinkronkan lalu ulangi penghapusan.')
+            state['guests']=[];state['logs']=[];state['guestEpoch']=state.get('guestEpoch',0)+1
+            validate(state);revision+=1
+            c.execute('UPDATE events SET state=?,revision=?,updated=? WHERE id=?',(encode(state),revision,now(),event))
+            c.execute('DELETE FROM operations WHERE event=?',(event,))
+            c.execute('DELETE FROM rsvps WHERE event=?',(event,))
+            c.execute('DELETE FROM wishes WHERE event=?',(event,))
+            if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='invitation_access'").fetchone():
+                links=[row[0] for row in c.execute('SELECT link_hash FROM invitation_access WHERE event=?',(event,))]
+                for link in links:c.execute('DELETE FROM invitation_sessions WHERE link_hash=?',(link,))
+                c.execute('DELETE FROM invitation_access WHERE event=?',(event,))
+            c.commit()
+            cleanup_error=None
+            try:
+                for old in self.backup_dir.glob('temu-*.sqlite3'):old.unlink()
+            except OSError:cleanup_error='Cadangan lama belum seluruhnya terhapus; periksa folder cadangan server.'
+            self.backup(force=True)
+            return {'ok':True,'state':state,'revision':revision,'backupAt':datetime.fromtimestamp(self.last_backup,timezone.utc).isoformat() if self.last_backup else None,'backupError':cleanup_error or self.backup_error}
     def sync(self,body):
         event=body.get('event');ops=body.get('operations',[])
         if not isinstance(event,str) or not 1<=len(event)<=200 or not isinstance(ops,list) or len(ops)>100:raise ValueError('Permintaan tidak valid.')
@@ -281,6 +311,17 @@ def make_handler(database,token,allowed_hosts):
         def do_HEAD(self):return self.do_GET()
         def do_DELETE(self):
             path=urlsplit(self.path).path
+            match=re.fullmatch(r'/api/events/([A-Za-z0-9_-]{1,200})/guests',path)
+            if match:
+                if not self.authorized() or self.headers.get('X-Temu-Delete')!='1':return self.reply(401,{'error':'Akses pengelola diperlukan.'})
+                try:
+                    size=int(self.headers.get('Content-Length','0'))
+                    if not 0<size<=1024:raise ValueError('Permintaan tidak valid.')
+                    body=json.loads(self.rfile.read(size))
+                    result=database.clear_guests(match.group(1),body.get('revision'),body.get('pin'))
+                    return self.reply(200,result)
+                except (ValueError,TypeError,KeyError) as error:return self.reply(409,{'error':str(error)})
+                except Exception:return self.reply(503,{'error':'Daftar tamu belum dapat dibersihkan. Coba lagi.'})
             if not path.startswith('/api/events/') or not re.fullmatch(r'[A-Za-z0-9_-]{1,200}',path[len('/api/events/'):]):return self.reply(404,{'error':'Tidak ditemukan.'})
             if not self.authorized() or self.headers.get('X-Temu-Delete')!='1':return self.reply(401,{'error':'Akses pengelola diperlukan.'})
             if not database.delete_event(path[len('/api/events/'):]):return self.reply(404,{'error':'Acara tidak ditemukan.'})

@@ -13,7 +13,7 @@ function normalizePhone(value){
 }
 function message(guest,event){
  const date=event.date?new Date(event.date+'T12:00:00').toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'}):'(tanggal menyusul)';
- const fields={nama:guest.name,acara:event.name,tanggal:date,jumlah:String(guest.quota)};
+ const fields={nama:guest.name,acara:String(event.name||'').replaceAll('Cesar & Revalina','Reva & Cesar').replaceAll('Cesar dan Revalina','Reva dan Cesar'),tanggal:date,jumlah:String(guest.quota)};
  return (event.invitationText||defaultTemplate).replace(/\{(nama|acara|tanggal|jumlah)\}/g,(_,key)=>fields[key]);
 }
 function whatsappURL(phone,text){const normalized=normalizePhone(phone);if(!normalized)throw Error('Simpan nomor WhatsApp tamu terlebih dahulu.');return 'https://wa.me/'+normalized+'?text='+encodeURIComponent(text);}

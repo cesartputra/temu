@@ -18,6 +18,9 @@ async function syncNow(){
   const applied=await TemuStore.transaction(current=>{
    if(current.state.event.id!==start.state.event.id||current.config.token!==start.config.token)return current;
    if(result.revision<(current.serverRevision||0))throw Error('Versi server lebih lama daripada sinkronisasi terakhir. Periksa pemulihan server sebelum melanjutkan.');
+   if((result.state.guestEpoch||0)>(current.state.guestEpoch||0)){
+    current.state=structuredClone(result.state);current.outbox=[];current.conflicts=[];current.backups=[];current.serverRevision=result.revision;current.lastSync=new Date().toISOString();current.serverBackupAt=result.backupAt;current.serverBackupError=result.backupError;return current;
+   }
    if(JSON.stringify(current.state)!==JSON.stringify(result.state)||result.results.some(x=>!x.ok))TemuStore.backup(current);
    const acknowledged=new Map(result.results.map(r=>[r.id,r]));
    for(const op of current.outbox){const answer=acknowledged.get(op.id);if(answer&&!answer.ok&&!current.conflicts.some(c=>c.id===op.id))current.conflicts.push({id:op.id,op,reason:answer.reason,at:new Date().toISOString()});}

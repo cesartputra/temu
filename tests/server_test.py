@@ -1,4 +1,4 @@
-import copy, importlib.util, json, os, sqlite3, tempfile, unittest, uuid, threading, urllib.request, urllib.error
+import copy, hashlib, importlib.util, json, os, sqlite3, tempfile, unittest, uuid, threading, urllib.request, urllib.error
 from pathlib import Path
 from unittest import mock
 spec=importlib.util.spec_from_file_location('server',Path(__file__).resolve().parents[1]/'server/server.py');server=importlib.util.module_from_spec(spec);spec.loader.exec_module(server)
@@ -47,6 +47,30 @@ class ServerTests(unittest.TestCase):
   self.assertTrue(self.db.sync({'event':'wedding','operations':[removed]})['results'][0]['ok'])
   with self.db.connect() as c:self.assertEqual(c.execute('SELECT count(*) FROM invitation_access').fetchone()[0],0)
   self.assertRaises(server.Denied,access.unlock,issued['link'],issued['code'],'127.0.0.1')
+ def test_clear_all_guests_requires_pin_and_revokes_personal_data(self):
+  pin='123456';digest=hashlib.sha256(('wedding:'+pin).encode()).hexdigest()
+  current=self.db.sync({'event':'wedding','operations':[]})
+  with self.db.connect() as c:
+   state=current['state'];state['pin']=digest;state['guests'][0]['phone']='6281234567890'
+   c.execute('UPDATE events SET state=? WHERE id=?',(server.encode(state),'wedding'))
+  access=server.GuestAccess(self.db);issued=access.issue('wedding','g')
+  with self.db.connect() as c:
+   c.execute('INSERT INTO rsvps VALUES(?,?,?,?,?)',('wedding','g','attending',1,server.now()))
+   c.execute('INSERT INTO wishes VALUES(?,?,?,?)',('wedding','g','Semoga bahagia',server.now()))
+  self.assertRaises(ValueError,self.db.clear_guests,'wedding',current['revision'],'0000')
+  self.assertRaises(ValueError,self.db.clear_guests,'wedding',current['revision']+1,pin)
+  self.db.backup(force=True)
+  result=self.db.clear_guests('wedding',current['revision'],pin)
+  self.assertTrue(result['ok']);self.assertEqual(result['state']['guests'],[]);self.assertEqual(result['state']['logs'],[])
+  self.assertEqual(result['state']['guestEpoch'],1)
+  with self.db.connect() as c:
+   for table in ('rsvps','wishes','invitation_access','operations'):
+    self.assertEqual(c.execute(f'SELECT count(*) FROM {table} WHERE event=?',('wedding',)).fetchone()[0],0)
+  backups=list(self.db.backup_dir.glob('temu-*.sqlite3'));self.assertEqual(len(backups),1)
+  with sqlite3.connect(backups[0]) as c:self.assertEqual(json.loads(c.execute('SELECT state FROM events').fetchone()[0])['guests'],[])
+  self.assertRaises(server.Denied,access.unlock,issued['link'],issued['code'],'127.0.0.1')
+  stale=self.db.sync({'event':'wedding','operations':[change(self.initial)]})
+  self.assertFalse(stale['results'][0]['ok']);self.assertEqual(stale['state']['guests'],[])
  def test_deleting_legacy_extra_event_preserves_main_event_media(self):
   extra=copy.deepcopy(self.initial);extra['event']['id']='legacy-extra'
   with self.db.connect() as c:c.execute('INSERT INTO events VALUES(?,?,?,?)',('legacy-extra',json.dumps(extra),1,server.now()))
@@ -75,5 +99,23 @@ class ServerTests(unittest.TestCase):
    req.add_header('X-Temu-Delete','1')
    with urllib.request.urlopen(req) as response:self.assertTrue(json.load(response)['ok'])
    self.assertEqual(self.db.events(),[])
+  finally:http.shutdown();http.server_close();thread.join()
+ def test_clear_guests_endpoint_needs_server_token_and_fresh_pin(self):
+  pin='8426';digest=hashlib.sha256(('wedding:'+pin).encode()).hexdigest()
+  with self.db.connect() as c:
+   state=self.db.sync({'event':'wedding','operations':[]})['state'];state['pin']=digest
+   c.execute('UPDATE events SET state=? WHERE id=?',(server.encode(state),'wedding'))
+  token='a'*40;http=server.ThreadingHTTPServer(('127.0.0.1',0),server.make_handler(self.db,token,{'127.0.0.1'}));thread=threading.Thread(target=http.serve_forever,daemon=True);thread.start()
+  try:
+   url=f'http://127.0.0.1:{http.server_port}/api/events/wedding/guests'
+   payload=json.dumps({'revision':1,'pin':pin}).encode()
+   req=urllib.request.Request(url,data=payload,method='DELETE',headers={'Content-Type':'application/json','X-Temu-Delete':'1'})
+   with self.assertRaises(urllib.error.HTTPError) as error:urllib.request.urlopen(req)
+   self.assertEqual(error.exception.code,401);error.exception.close()
+   req.add_header('Authorization','Bearer '+token)
+   bad=urllib.request.Request(url,data=json.dumps({'revision':1,'pin':'1111'}).encode(),method='DELETE',headers=dict(req.headers))
+   with self.assertRaises(urllib.error.HTTPError) as error:urllib.request.urlopen(bad)
+   self.assertEqual(error.exception.code,409);error.exception.close()
+   with urllib.request.urlopen(req) as response:self.assertEqual(json.load(response)['state']['guests'],[])
   finally:http.shutdown();http.server_close();thread.join()
 if __name__=='__main__':unittest.main()
