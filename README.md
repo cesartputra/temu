@@ -38,6 +38,8 @@ Pada sesi pengembangan ini server dijalankan dengan `--data-dir work/temu-server
 
 Di **Daftar tamu**, pengelola dapat memilih **Reset kehadiran** untuk mengembalikan jumlah hadir semua tamu ke nol dan mengosongkan riwayat check-in. Sambungkan server, selesaikan antrean dan konflik, lalu masukkan kembali PIN pengelola. Nama, kuota, QR, tautan undangan, RSVP, dan doa tidak berubah. Perangkat lain menerima reset saat tersambung; check-in lama yang belum sempat tersinkron tidak akan diterapkan. Cadangan server baru dibuat setelah reset, sedangkan cadangan lokal sebelum reset tidak dapat dipulihkan ke acara yang sama.
 
+Pencarian tamu tanpa QR menampilkan daftar nama yang cocok beserta kelompoknya sebelum petugas memilih undangan dan mencatat kehadiran. **Cetak QR** memakai halaman A4 landscape berisi maksimal sembilan kartu per halaman, bernuansa krem dan emas seperti undangan digital. Nama pada kartu mengikuti kuota: satu orang memakai nama asli, dua orang menambahkan “& Pasangan”, dan lebih dari dua menambahkan “& Keluarga”. ID/kode tamu tidak dicetak sebagai teks. **Hapus semua tamu** berada di Pengaturan dan tetap memerlukan sinkronisasi serta PIN pengelola.
+
 Server memakai transaksi SQLite dan daftar ID operasi persisten. Antrean yang dibuat ketika permintaan jaringan sedang berlangsung dipertahankan dan diperiksa terhadap keadaan server. Operasi bertentangan disimpan sebagai konflik; operasi tidak terkait tetap dapat diterapkan.
 
 ## Cadangan otomatis
