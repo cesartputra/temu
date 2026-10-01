@@ -23,3 +23,5 @@
 @media(prefers-reduced-motion:reduce){.confetti-layer{display:none}}
 @media(min-width:761px){.music-toggle{left:20px;right:auto}.film-caption{bottom:76px}}
 @media(max-width:390px){.hero-countdown-units strong{font-size:clamp(1.6rem,8vw,2.2rem)}.hero-countdown-units small{font-size:.5rem}}
+
+.access-gate{min-height:100svh;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:40px 24px;background:#eee5d6}.access-gate h1{font:clamp(2.6rem,7vw,4.5rem)/1.15 Georgia,serif;margin:24px 0}.access-gate h1 em{color:#98784e}.access-gate #gate-status{max-width:550px;line-height:1.7}.access-note{max-width:430px;font-size:.8rem;color:#807364;margin-top:35px}.wish-attendance{display:inline-flex;margin:3px 0 14px;padding:6px 10px;border-radius:20px;font-size:.72rem;color:#786e5d;background:#eee8dd}.wish-attendance.attending{background:#e7efe4;color:#42603d}.wish-attendance.declined{background:#f2e6e0;color:#8b5b4e}

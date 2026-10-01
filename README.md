@@ -136,3 +136,11 @@ Setiap tamu aktif mendapat tautan undangan unik dari **Daftar tamu → Undangan*
 RSVP mencatat hadir (jumlah orang tidak boleh melebihi kuota) atau tidak bisa hadir. Panel **Konfirmasi kehadiran** di daftar tamu menampilkan semua tamu aktif dan ringkasannya dari server. Panel diperbarui ketika daftar dibuka atau tombol **Perbarui** ditekan, sehingga koneksi diperlukan untuk status terbaru; check-in QR tetap berjalan offline. Setiap tamu dapat menulis satu doa dan memperbaruinya. Doa yang dikirim tampil kepada semua pengunjung undangan dengan nama tamu. Hapus/nonaktifkan tamu membuat tautannya tidak berlaku; penghapusan menghapus RSVP dan doanya dari server.
 
 Foto profil pasangan `portrait-cesar.jpg` dan `portrait-revalina.jpg` disimpan di volume media Helipod, bukan GitHub publik.
+
+### Undangan pribadi dan pemulihan perangkat
+
+Undangan hanya dibuka melalui tautan unik tamu. Browser pertama mendapat cookie acak HttpOnly (Secure di HTTPS), dan server menyimpan hash cookie untuk mengunci akses. Tautan yang diteruskan ke browser lain ditolak. `/invite` tanpa tautan tidak menampilkan isi undangan. Media dan API undangan memerlukan akses browser yang sah; templat HTML berada di luar folder statis.
+
+Ini mengikat **browser**, bukan identitas pemilik HP. Orang pertama yang menerima dan membuka tautan dapat mengklaimnya; jangan membuka tautan tamu dari perangkat pengelola. Menghapus cookie, menggunakan mode privat, atau berganti browser memerlukan pemulihan. Pada **Undangan → Pulihkan akses perangkat**, masukkan ulang PIN pengelola. Server membatalkan tautan lama, membuat tautan baru, dan tetap mempertahankan QR check-in serta RSVP. Kirim tautan baru langsung kepada tamu. Foto atau isi undangan yang telah dilihat masih dapat disalin/difoto oleh penerima.
+
+Penguncian dan pemulihan memerlukan koneksi server. Pencatatan check-in pada buku tamu tetap dapat berjalan offline.
