@@ -184,3 +184,6 @@ Untuk push tanpa deploy, integrasi repo GitHub pada layanan Helipod
 Container LIVE, domain, volume, dan data tidak diubah. Hubungkan kembali
 `cesartputra/temu`, branch `main`, hanya saat deploy berikutnya disetujui.
 
+Revisi kartu V2: jarak antar-kloter konsisten, kartu ucapan bergaya kertas hangat,
+dan label kloter dihilangkan. Jam akad/resepsi ditonjolkan. Tombol kalender
+mengunduh berkas `.ics` berisi dua jadwal terpisah dalam zona waktu WIB.
