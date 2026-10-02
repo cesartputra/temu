@@ -6,7 +6,7 @@ async function guestInvitationURL(g){
  if(!record.config.enabled||!record.config.token)throw Error('Hubungkan server untuk membuat tautan unik tamu.');
  const response=await fetch('/api/invite/admin/link',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+record.config.token,'X-Temu-Invite':'1'},body:JSON.stringify({event:db.event.id,guest:g.id}),cache:'no-store',signal:AbortSignal.timeout(15000)}),data=await response.json();
  if(!response.ok)throw Error(data.error||'Tautan tamu belum dapat dibuat.');
- const url=new URL('/invite',invitationOrigin());url.hash=new URLSearchParams({g:data.guest,k:data.key}).toString();return url.href;
+ const url=new URL('/invitation2',invitationOrigin());url.hash=new URLSearchParams({g:data.guest,k:data.key}).toString();return url.href;
 }
 async function showGuestInvitation(g){
  modal('Undangan digital · '+g.name,'<p id="invite-loading">Menyiapkan tautan unik tamu…</p>');

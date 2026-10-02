@@ -1,0 +1,129 @@
+'use strict';
+const $=selector=>document.querySelector(selector);
+const music=$('#music'),musicToggle=$('#music-toggle'),musicLabel=$('#music-label');
+let personal=null,accessAllowed=false;
+function safeText(value){return String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));}
+function setMusicState(){const playing=!music.paused;musicToggle.setAttribute('aria-pressed',String(playing));musicToggle.setAttribute('aria-label',playing?'Jeda musik':'Putar musik');musicLabel.textContent=playing?'Jeda musik':'Putar musik';}
+async function playMusic(){if(!accessAllowed)return;try{await music.play();}catch{}setMusicState();}
+musicToggle.addEventListener('click',async()=>{if(music.paused)await playMusic();else{music.pause();setMusicState();}});
+music.addEventListener('play',setMusicState);music.addEventListener('pause',setMusicState);
+const reducedMotion=window.matchMedia('(prefers-reduced-motion: reduce)');
+function safeMap(value){try{const url=new URL(value);return url.protocol==='https:'&&['maps.app.goo.gl','www.google.com','google.com','maps.google.com'].includes(url.hostname)?url.href:null;}catch{return null;}}
+function dateText(raw,options){if(!/^\d{4}-\d{2}-\d{2}$/.test(raw||''))return 'Tanggal akan diinformasikan';return new Date(raw+'T12:00:00').toLocaleDateString('id-ID',options);}
+let countdownTimer,confettiShown=false;
+function celebrate(){
+  if(confettiShown||window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)return;
+  confettiShown=true;
+  const layer=document.createElement('div');layer.className='confetti-layer';layer.setAttribute('aria-hidden','true');
+  const colors=['#e8c69d','#f5e9d6','#a2453c','#bd9c72','#fff9ee'];
+  for(let i=0;i<32;i++){
+    const piece=document.createElement('span');piece.className='confetti-piece';
+    piece.style.setProperty('--x',`${Math.random()*100}%`);
+    piece.style.setProperty('--delay',`${Math.random()*4}s`);
+    piece.style.setProperty('--duration',`${4+Math.random()*4}s`);
+    piece.style.setProperty('--drift',`${Math.random()*160-80}px`);
+    piece.style.backgroundColor=colors[i%colors.length];layer.append(piece);
+  }
+  document.body.append(layer);setTimeout(()=>layer.remove(),12000);
+}
+function countdown(raw){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(raw||''))return;
+  clearInterval(countdownTimer);
+  const target=new Date(raw+'T00:00:00+07:00').getTime();
+  function render(){
+    const remaining=Math.max(0,target-Date.now());
+    const totalSeconds=Math.ceil(remaining/1000);
+    const days=Math.floor(totalSeconds/86400);
+    const hours=Math.floor(totalSeconds%86400/3600);
+    const minutes=Math.floor(totalSeconds%3600/60);
+    const seconds=totalSeconds%60;
+    $('#hero-days').textContent=String(days);
+    $('#hero-hours').textContent=String(hours).padStart(2,'0');
+    $('#hero-minutes').textContent=String(minutes).padStart(2,'0');
+    $('#hero-seconds').textContent=String(seconds).padStart(2,'0');
+    if(!remaining){clearInterval(countdownTimer);celebrate();}
+  }
+  render();
+  if(target>Date.now())countdownTimer=setInterval(render,1000);
+}
+async function invitePost(path,payload){const response=await fetch('/api/invite/'+path,{method:'POST',headers:{'Content-Type':'application/json','X-Temu-Invite':'1'},body:JSON.stringify(payload),cache:'no-store',signal:AbortSignal.timeout(12000)});const data=await response.json();if(!response.ok)throw Error(data.error||'Permintaan belum berhasil.');return data;}
+function recipient(guest){return guest.name+(guest.quota===2?' & Pasangan':guest.quota>2?' & Keluarga':'');}
+function showPersonal(info){
+  $('#cover-recipient').textContent=recipient(info.guest);
+  $('#guest-cover').hidden=false;
+  $('#invitation').hidden=true;
+  $('#rsvp-form').hidden=false;
+  $('#wish-form').hidden=false;
+  $('#rsvp-intro').textContent='Konfirmasi untuk '+info.guest.name+'. Undangan berlaku hingga '+info.guest.quota+' orang.';
+  const countSelect=$('#rsvp-count');
+  countSelect.replaceChildren();
+  for(let count=1;count<=info.guest.quota;count++)countSelect.add(new Option(String(count),String(count)));
+  countSelect.value=String(info.guest.quota);
+  if(info.rsvp){
+    const choice=$('#rsvp-form input[value="'+info.rsvp.status+'"]');
+    if(choice)choice.checked=true;
+    if(info.rsvp.status==='attending')countSelect.value=String(info.rsvp.count);
+    $('#rsvp-count-wrap').hidden=info.rsvp.status!=='attending';
+    $('#rsvp-status').textContent=info.rsvp.status==='attending'?'Tersimpan: hadir '+info.rsvp.count+' orang.':'Tersimpan: belum bisa hadir.';
+  }
+  if(info.wish)$('#wish-message').value=info.wish.message;
+}
+let invitationOpened=false;
+$('#open-personal').addEventListener('click',async()=>{
+  if(invitationOpened)return;
+  invitationOpened=true;
+  const button=$('#open-personal');button.disabled=true;
+  // Start sound in the tap handler so browsers can authorize playback.
+  music.src='/api/invite/public-media/song.mp3';playMusic();
+  const video=$('#hero-video');video.src='/api/invite/public-media/film.mp4';video.play().catch(()=>{});
+  $('#guest-cover').classList.add('is-opening');
+  if(!reducedMotion.matches)await new Promise(resolve=>setTimeout(resolve,420));
+  $('#guest-cover').hidden=true;$('#invitation').hidden=false;
+  musicToggle.hidden=false;document.body.classList.add('invitation-open');
+  window.scrollTo(0,0);$('#invitation').focus({preventScroll:true});
+  setupPageMotion();setupNavigation();updateGallery();
+});
+document.querySelectorAll('a[href^="#"]').forEach(anchor=>anchor.addEventListener('click',event=>{if(!personal)return;const target=document.querySelector(anchor.getAttribute('href'));if(target){event.preventDefault();target.scrollIntoView({behavior:reducedMotion.matches?'auto':'smooth'});}}));
+$('#rsvp-form').addEventListener('change',()=>{$('#rsvp-count-wrap').hidden=$('#rsvp-form input[name="status"]:checked')?.value!=='attending';});
+$('#rsvp-form').addEventListener('submit',async event=>{event.preventDefault();if(!personal)return;const status=$('#rsvp-form input[name="status"]:checked')?.value,count=status==='attending'?Number($('#rsvp-count').value):0,button=$('#rsvp-form button[type=submit]');button.disabled=true;try{const info=await invitePost('rsvp',{...personal,status,count});$('#rsvp-status').textContent=info.rsvp.status==='attending'?'Terima kasih! Kehadiran '+info.rsvp.count+' orang sudah dikonfirmasi.':'Konfirmasi belum bisa hadir telah tersimpan. Terima kasih sudah memberi kabar.';await loadWishes();}catch(error){$('#rsvp-status').textContent=error.message;}finally{button.disabled=false;}});
+$('#wish-form').addEventListener('submit',async event=>{event.preventDefault();if(!personal)return;const button=$('#wish-form button[type=submit]');button.disabled=true;try{await invitePost('wish',{...personal,message:$('#wish-message').value});$('#wish-status').textContent='Doa Anda tersimpan. Terima kasih.';await loadWishes();}catch(error){$('#wish-status').textContent=error.message;}finally{button.disabled=false;}});
+async function loadWishes(){try{const response=await fetch('/api/invite/wishes',{cache:'no-store',signal:AbortSignal.timeout(12000)}),data=await response.json();if(!response.ok)throw Error(data.error||'Doa belum dapat dimuat.');$('#wish-list').innerHTML=data.wishes.length?data.wishes.map(wish=>'<article class="wish-card"><strong>'+safeText(wish.name)+'</strong><span class="wish-attendance '+(['attending','declined'].includes(wish.status)?wish.status:'pending')+'">'+(wish.status==='attending'?'✓ Konfirmasi hadir':wish.status==='declined'?'Tidak bisa hadir':'Belum konfirmasi')+'</span><time>'+safeText(new Date(wish.updated).toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'}))+'</time><p>'+safeText(wish.message)+'</p></article>').join(''):'<p>Belum ada doa. Jadilah yang pertama mengirimkan ucapan hangat.</p>';}catch(error){$('#wish-list').textContent=error.message;}}
+async function loadInvitation(){accessAllowed=false;try{const params=new URLSearchParams(location.hash.slice(1)),guest=params.get('g'),key=params.get('k');if(!guest||!key)throw Error('Undangan ini hanya dapat dibuka melalui tautan unik yang dikirimkan kepada Anda.');personal={guest,key};const info=await invitePost('guest',personal);accessAllowed=true;const response=await fetch('/api/invite/public',{cache:'no-store',signal:AbortSignal.timeout(12000)});const data=await response.json();if(!response.ok||!data.event)throw Error(data.error||'Undangan belum tersedia.');const event=data.event,w=event.wedding||{};const legacy=w.firstName==='Cesar'&&w.secondName==='Revalina',first=legacy?'Reva':w.firstName||'Reva',second=legacy?'Cesar':w.secondName||'Cesar';$('#first-name').textContent=first;$('#second-name').textContent=second;$('#signature').textContent=first+' & '+second;$('#closing-names').textContent=first+' & '+second;$('#cover-date').textContent=dateText(event.date,{day:'numeric',month:'long',year:'numeric'});$('#event-date').textContent=dateText(event.date,{weekday:'long',day:'numeric',month:'long',year:'numeric'});$('#venue').textContent=w.venue||'Tempat akan diinformasikan';$('#address').textContent=w.address||'Bandung, Jawa Barat';$('#ceremony-time').textContent=w.ceremonyTime||'Waktu akan diinformasikan';$('#reception-time').textContent=w.receptionTime||'Waktu akan diinformasikan';const map=safeMap(w.mapsURL);$('#maps-link').hidden=!map;if(map)$('#maps-link').href=map;countdown(event.date);document.title=first+' & '+second+' — Undangan Pernikahan';$('#load-error').hidden=true;showPersonal(info);loadWishes();}catch(error){accessAllowed=false;music.pause();musicToggle.hidden=true;$('#invitation').hidden=true;$('#guest-cover').hidden=true;$('#error-message').textContent=error.message||'Periksa koneksi dan coba lagi.';$('#load-error').hidden=false;}}
+$('#retry').addEventListener('click',loadInvitation);loadInvitation();
+
+function setupPageMotion(){
+  if(reducedMotion.matches||!('IntersectionObserver' in window))return;
+  const sections=document.querySelectorAll('.section,.portrait-band,footer');
+  document.body.classList.add('motion-ready');
+  const observer=new IntersectionObserver(entries=>entries.forEach(entry=>{
+    if(entry.isIntersecting){entry.target.classList.add('in-view');observer.unobserve(entry.target);}
+  }),{threshold:0,rootMargin:'0px 0px -35px 0px'});
+  sections.forEach(section=>{section.classList.add('reveal');observer.observe(section);});
+  reducedMotion.addEventListener('change',event=>{if(event.matches){observer.disconnect();document.body.classList.remove('motion-ready');}},{once:true});
+}
+function setupNavigation(){
+  const links=[...document.querySelectorAll('.topbar div a')];
+  let frame;
+  function update(){
+    const marker=innerHeight*.35;
+    const current=links.find(link=>{const rect=$(link.getAttribute('href')).getBoundingClientRect();return rect.top<=marker&&rect.bottom>marker;});
+    links.forEach(link=>{const active=link===current;link.classList.toggle('active',active);if(active)link.setAttribute('aria-current','location');else link.removeAttribute('aria-current');});
+  }
+  window.addEventListener('scroll',()=>{cancelAnimationFrame(frame);frame=requestAnimationFrame(update);},{passive:true});
+  window.addEventListener('resize',update);update();
+}
+const gallery=$('.gallery'),galleryItems=[...document.querySelectorAll('.gallery-item')];
+function galleryIndex(){
+  const center=gallery.getBoundingClientRect().left+gallery.clientWidth/2;
+  return galleryItems.reduce((best,item,index)=>{
+    const rect=item.getBoundingClientRect(),distance=Math.abs(rect.left+rect.width/2-center);
+    return distance<best.distance?{index,distance}:best;
+  },{index:0,distance:Infinity}).index;
+}
+function updateGallery(){const index=galleryIndex();$('#gallery-position').textContent=String(index+1).padStart(2,'0')+' / '+String(galleryItems.length).padStart(2,'0');$('#gallery-prev').disabled=index===0;$('#gallery-next').disabled=index===galleryItems.length-1;}
+function moveGallery(direction){const item=galleryItems[Math.max(0,Math.min(galleryItems.length-1,galleryIndex()+direction))];gallery.scrollBy({left:item.getBoundingClientRect().left+item.offsetWidth/2-gallery.getBoundingClientRect().left-gallery.clientWidth/2,behavior:reducedMotion.matches?'instant':'smooth'});}
+$('#gallery-prev').addEventListener('click',()=>moveGallery(-1));$('#gallery-next').addEventListener('click',()=>moveGallery(1));
+let galleryFrame;gallery.addEventListener('scroll',()=>{cancelAnimationFrame(galleryFrame);galleryFrame=requestAnimationFrame(updateGallery);},{passive:true});window.addEventListener('resize',updateGallery);
+const viewer=$('#photo-viewer');let photoTrigger=null;
+galleryItems.forEach(item=>item.addEventListener('click',()=>{const photo=item.querySelector('img');photoTrigger=item;$('#photo-full').src=photo.currentSrc||photo.src;$('#photo-full').alt=photo.alt;$('#photo-caption').textContent=item.querySelector('span').textContent;viewer.showModal();}));
+$('#photo-close').addEventListener('click',()=>viewer.close());viewer.addEventListener('click',event=>{if(event.target===viewer){const rect=viewer.getBoundingClientRect();if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom)viewer.close();}});viewer.addEventListener('close',()=>photoTrigger?.focus({preventScroll:true}));

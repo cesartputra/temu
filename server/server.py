@@ -457,12 +457,14 @@ def make_handler(database,token,allowed_hosts):
                 if not self.authorized():return self.reply(401,{'error':'Kunci server belum benar.'})
                 if path=='/api/events':return self.reply(200,{'events':database.events()})
                 return self.reply(404,{'error':'Tidak ditemukan.'})
-            if path in ('/invite','/invite/','/invite.html'):
+            if path in ('/invite','/invite/','/invite.html','/invitation2','/invitation2/'):
                 try:
                     database.require_invitation_device(self.device_token())
                     opened=parse_qs(urlsplit(self.path).query).get('open')==['1']
                 except Denied:opened=False
-                data=(ROOT/('server/templates/invite.html' if opened else 'dist/invite-gate.html')).read_bytes();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.send_header('X-Robots-Tag','noindex, nofollow, noarchive');self.send_header('Content-Security-Policy',"default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");self.send_header('Content-Length',str(len(data)));self.end_headers()
+                version2=path in ('/invitation2','/invitation2/')
+                page=('server/templates/invitation2.html' if opened else 'dist/invitation2-gate.html') if version2 else ('server/templates/invite.html' if opened else 'dist/invite-gate.html')
+                data=(ROOT/page).read_bytes();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.send_header('X-Robots-Tag','noindex, nofollow, noarchive');self.send_header('Content-Security-Policy',"default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");self.send_header('Content-Length',str(len(data)));self.end_headers()
                 if self.command!='HEAD':self.wfile.write(data)
                 return
             return super().do_HEAD() if self.command=='HEAD' else super().do_GET()

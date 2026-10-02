@@ -144,3 +144,25 @@ Undangan hanya dibuka melalui tautan unik tamu. Browser pertama mendapat cookie 
 Ini mengikat **browser**, bukan identitas pemilik HP. Orang pertama yang menerima dan membuka tautan dapat mengklaimnya; jangan membuka tautan tamu dari perangkat pengelola. Menghapus cookie, menggunakan mode privat, atau berganti browser memerlukan pemulihan. Pada **Undangan → Pulihkan akses perangkat**, masukkan ulang PIN pengelola. Server membatalkan tautan lama, membuat tautan baru, dan tetap mempertahankan QR check-in serta RSVP. Kirim tautan baru langsung kepada tamu. Foto atau isi undangan yang telah dilihat masih dapat disalin/difoto oleh penerima.
 
 Penguncian dan pemulihan memerlukan koneksi server. Pencatatan check-in pada buku tamu tetap dapat berjalan offline.
+
+### Undangan versi 2 — tema gambar tangan
+
+Undangan memakai latar kertas krem, aksen burgundy/emas, ilustrasi SVG pita,
+cincin, dan bunga, serta foto dengan bingkai album. Mobile menggunakan video
+latar dengan lapisan gelap dan navigasi bawah Acara/RSVP/Galeri/Doa. Galeri
+mendukung geser, tombol sebelumnya/berikutnya, dan dialog foto yang dapat
+ditutup dengan Escape.
+
+Musik dan video dimuat setelah tamu menekan **Buka undangan**. Foto bagian
+berikutnya dimuat bertahap. Tidak ada font atau pustaka animasi eksternal.
+Animasi meliputi goresan ilustrasi, transisi sampul, kemunculan bagian saat
+digulir, dan confetti setelah hitung mundur selesai. Pengaturan perangkat
+`prefers-reduced-motion` menonaktifkan animasi dekoratif.
+
+RSVP, ucapan, tautan unik, penguncian browser pertama, dan API buku tamu
+menggunakan alur yang sama. Desain tidak mengubah QR masuk maupun data tamu.
+
+Versi 2 tersedia di `/invitation2#g=…&k=…`. Tombol undangan pengelola
+menghasilkan tautan versi 2; tautan lama `/invite` tetap membuka desain lama.
+Keduanya memakai kunci tamu dan penguncian browser yang sama. Akses tanpa
+tautan unik hanya menampilkan halaman pemeriksaan, tanpa isi undangan.

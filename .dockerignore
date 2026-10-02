@@ -1,6 +1,8 @@
 **
 !server/
 !server/*.py
+!server/templates/
+!server/templates/*.html
 !dist/
 !dist/**
 !deploy/

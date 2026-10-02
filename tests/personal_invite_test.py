@@ -77,6 +77,18 @@ class PersonalInvitationTests(unittest.TestCase):
   link=self.db.guest_link('wedding','g');self.post('/api/invite/guest',link)
   with self.opener.open(self.origin+'/invite?open=1') as response:self.assertIn('Revalina Vikasturi',response.read().decode())
   with self.opener.open(self.origin+'/api/invite/public') as response:self.assertNotIn('guests',json.load(response))
+ def test_version2_route_requires_same_invitation_device(self):
+  for path in ['/invitation2','/invitation2/','/invitation2?open=1']:
+   with self.opener.open(self.origin+path) as response:
+    html=response.read().decode();self.assertIn('invite-gate.js',html);self.assertNotIn('<video',html)
+  link=self.db.guest_link('wedding','g');self.post('/api/invite/guest',link)
+  with self.opener.open(self.origin+'/invitation2?open=1') as response:
+   html=response.read().decode();self.assertIn('/invitation2.css',html);self.assertIn('/invitation2.js',html);self.assertIn('Revalina Vikasturi',html);self.assertIn('pathLength="1"',html)
+  with self.opener.open(self.origin+'/invite?open=1') as response:
+   html=response.read().decode();self.assertIn('/invite.css',html);self.assertNotIn('/invitation2.css',html)
+  with urllib.request.urlopen(self.origin+'/invitation2?open=1') as response:
+   self.assertNotIn('Revalina Vikasturi',response.read().decode())
+
  def test_reset_requires_pin_rotates_link_and_preserves_qr(self):
   with self.db.connect() as c:
    row=c.execute('SELECT state FROM events WHERE id=?',('wedding',)).fetchone();state=json.loads(row[0]);state['pin']=hashlib.sha256(b'wedding:1234').hexdigest();c.execute('UPDATE events SET state=? WHERE id=?',(json.dumps(state),'wedding'))
