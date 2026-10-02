@@ -155,8 +155,8 @@ ditutup dengan Escape.
 
 Musik dan video dimuat setelah tamu menekan **Buka undangan**. Foto bagian
 berikutnya dimuat bertahap. Tidak ada font atau pustaka animasi eksternal.
-Animasi meliputi goresan ilustrasi, transisi sampul, kemunculan bagian saat
-digulir, dan confetti setelah hitung mundur selesai. Pengaturan perangkat
+Animasi meliputi goresan ilustrasi, transisi sampul, kemunculan bagian setiap kali masuk kembali ke layar saat
+digulir (termasuk ketika menggulir ke atas), dan confetti setelah hitung mundur selesai. Pengaturan perangkat
 `prefers-reduced-motion` menonaktifkan animasi dekoratif.
 
 RSVP, ucapan, tautan unik, penguncian browser pertama, dan API buku tamu

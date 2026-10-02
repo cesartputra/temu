@@ -92,14 +92,18 @@ async function loadInvitation(){accessAllowed=false;try{const params=new URLSear
 $('#retry').addEventListener('click',loadInvitation);loadInvitation();
 
 function setupPageMotion(){
-  if(reducedMotion.matches||!('IntersectionObserver' in window))return;
-  const sections=document.querySelectorAll('.section,.portrait-band,footer');
-  document.body.classList.add('motion-ready');
+  if(!('IntersectionObserver' in window))return;
+  const sections=document.querySelectorAll('.cover-paper,.section,.portrait-band,footer');
+  const sketches=document.querySelectorAll('#invitation .sketch');
+  document.body.classList.toggle('motion-ready',!reducedMotion.matches);
   const observer=new IntersectionObserver(entries=>entries.forEach(entry=>{
-    if(entry.isIntersecting){entry.target.classList.add('in-view');observer.unobserve(entry.target);}
+    // Keep observing: leaving the viewport resets the animation for the next visit.
+    const className=entry.target.classList.contains('motion-sketch')?'sketch-in-view':'in-view';
+    entry.target.classList.toggle(className,entry.isIntersecting);
   }),{threshold:0,rootMargin:'0px 0px -35px 0px'});
   sections.forEach(section=>{section.classList.add('reveal');observer.observe(section);});
-  reducedMotion.addEventListener('change',event=>{if(event.matches){observer.disconnect();document.body.classList.remove('motion-ready');}},{once:true});
+  sketches.forEach(sketch=>{sketch.classList.add('motion-sketch');observer.observe(sketch);});
+  reducedMotion.addEventListener('change',event=>document.body.classList.toggle('motion-ready',!event.matches));
 }
 function setupNavigation(){
   const links=[...document.querySelectorAll('.topbar div a')];
