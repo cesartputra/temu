@@ -15,3 +15,28 @@ test('QR buatan dapat dibaca kembali oleh jsQR',()=>{const qr=require('../dist/v
 test('Daftar tamu memisahkan nomor HP dan jumlah tanpa kode di nama',async()=>{const c=await context();vm.runInContext("db.guests=[{id:'g',code:'secret-qr',name:'Cesar',phone:'6281234567890',group:'OJK',quota:2,arrived:0,active:true}];document.querySelector('#search').value='';document.querySelector('#filter').value='all';renderGuests()",c);const html=vm.runInContext("document.querySelector('#guest-list').innerHTML",c);assert.match(html,/<td><strong>Cesar<\/strong><\/td><td>\+6281234567890<\/td><td>OJK<\/td><td>2 orang<\/td>/);assert.doesNotMatch(html,/secret-qr/);});
 
 test('Ringkasan membedakan kuota orang aktif dari jumlah check-in',async()=>{const c=await context();const markup=vm.runInContext("(()=>{db.guests=[{id:'a',code:'a',name:'Aktif A',group:'',quota:2,arrived:1,active:true},{id:'b',code:'b',name:'Aktif B',group:'',quota:3,arrived:0,active:true},{id:'c',code:'c',name:'Nonaktif',group:'',quota:9,arrived:0,active:false}];document.querySelector('#filter').value='all';render();return document.querySelector('#stats').innerHTML})()",c);assert.match(markup,/Total undangan aktif<\/span><strong>2<small>undangan/);assert.match(markup,/Total orang diundang<\/span><strong>5<small>orang/);assert.match(markup,/Orang hadir<\/span><strong>1<small>orang/);});
+test('WhatsApp tanpa nomor meminta nomor saja dan melanjutkan tanpa membuka Ubah',async()=>{
+ const c=await context();
+ await vm.runInContext("commit(d=>d.guests.push({id:'wa',code:'qr-tetap',name:'Tamu WhatsApp',phone:'',group:'Keluarga',quota:2,arrived:0,active:true}))",c);
+ vm.runInContext("editGuest=()=>{throw Error('WhatsApp tidak boleh membuka Ubah');}",c);
+ await vm.runInContext("showWhatsApp(db.guests[0],'https://example.com/invitation2#g=wa&k=key')",c);
+ assert.equal(vm.runInContext("document.querySelector('#modal-title').textContent",c),'Nomor WhatsApp tamu');
+ const html=vm.runInContext("document.querySelector('#modal-body').innerHTML",c);
+ assert.match(html,/whatsapp-phone-form/);assert.doesNotMatch(html,/guest-form|Ganti QR/);
+ vm.runInContext("document.querySelector('#whatsapp-phone').value='081234567890';var resumed=null;showWhatsApp=async(g,link)=>{resumed={guest:g,link};}",c);
+ await vm.runInContext("document.querySelector('#whatsapp-phone-form').onsubmit({preventDefault(){},target:{querySelector(){return {disabled:false}}}})",c);
+ assert.equal(vm.runInContext('db.guests[0].phone',c),'6281234567890');
+ assert.equal(vm.runInContext('db.guests[0].code',c),'qr-tetap');
+ assert.equal(vm.runInContext('resumed.guest.quota',c),2);
+ assert.equal(vm.runInContext('resumed.link',c),'https://example.com/invitation2#g=wa&k=key');
+});
+test('Nomor WhatsApp tidak valid tidak mengubah data dan tidak membuka Ubah',async()=>{
+ const c=await context();
+ await vm.runInContext("commit(d=>d.guests.push({id:'wa',code:'qr',name:'Tamu WhatsApp',phone:'',group:'',quota:1,arrived:0,active:true}))",c);
+ await vm.runInContext("showWhatsApp(db.guests[0])",c);
+ vm.runInContext("document.querySelector('#whatsapp-phone').value='abc'",c);
+ await vm.runInContext("document.querySelector('#whatsapp-phone-form').onsubmit({preventDefault(){},target:{querySelector(){return {disabled:false}}}})",c);
+ assert.equal(vm.runInContext('db.guests[0].phone',c),'');
+ assert.ok(vm.runInContext("document.querySelector('#whatsapp-phone-status').textContent.length",c)>0);
+ assert.equal(vm.runInContext("document.querySelector('#modal-title').textContent",c),'Nomor WhatsApp tamu');
+});

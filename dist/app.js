@@ -103,7 +103,21 @@ if(document.modelContext?.registerTool){try{document.modelContext.registerTool({
 
 async function showWhatsApp(guest,invitationLink=null){
  const g=db.guests.find(x=>x.id===guest.id);if(!g?.active)return toast('Aktifkan undangan sebelum membagikannya.');
- if(!g.phone){editGuest(g);return toast('Isi nomor WhatsApp, simpan, lalu pilih WhatsApp kembali.');}
+ if(!g.phone){
+  modal('Nomor WhatsApp tamu',`<p>Tambahkan nomor WhatsApp untuk <strong>${esc(g.name)}</strong> agar pesan undangan dan QR dapat disiapkan.</p><form id="whatsapp-phone-form"><label for="whatsapp-phone">Nomor WhatsApp<input id="whatsapp-phone" type="tel" inputmode="tel" autocomplete="tel" maxlength="30" placeholder="08… atau +62…" required></label><p class="hint">Nomor 08 akan disimpan dengan kode negara 62.</p><p id="whatsapp-phone-status" class="hint" role="status"></p><div class="actions"><button type="button" id="cancel-whatsapp-phone">Batal</button><button type="submit" class="primary">Simpan &amp; lanjutkan ke WhatsApp</button></div></form>`);
+  $('#cancel-whatsapp-phone').onclick=()=>$('#modal').close();
+  $('#whatsapp-phone-form').onsubmit=async event=>{
+   event.preventDefault();const button=event.target.querySelector('button[type="submit"]');button.disabled=true;
+   try{
+    const phone=TemuInvitations.normalizePhone($('#whatsapp-phone').value);
+    if(!phone)throw Error('Isi nomor WhatsApp tamu terlebih dahulu.');
+    await commit(d=>{const guest=d.guests.find(x=>x.id===g.id);if(!guest?.active||guest.deleted)throw Error('Undangan sudah tidak aktif.');guest.phone=phone;});
+    await showWhatsApp(db.guests.find(x=>x.id===g.id),invitationLink);
+   }catch(error){$('#whatsapp-phone-status').textContent=error.message;}
+   finally{button.disabled=false;}
+  };
+  return;
+ }
  try{invitationLink=invitationLink||await guestInvitationURL(g);}catch(error){toast(error.message);return;}
  const event=structuredClone(db.event),code=g.code,phone=g.phone;
  const publicLink=invitationLink;
