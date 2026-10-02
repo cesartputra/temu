@@ -166,3 +166,21 @@ Versi 2 tersedia di `/invitation2#g=…&k=…`. Tombol undangan pengelola
 menghasilkan tautan versi 2; tautan lama `/invite` tetap membuka desain lama.
 Keduanya memakai kunci tamu dan penguncian browser yang sama. Akses tanpa
 tautan unik hanya menampilkan halaman pemeriksaan, tanpa isi undangan.
+
+### Revisi ucapan dan galeri versi 2
+
+Jam acara pada versi 2: akad **15.30 WIB – 17.00 WIB**, resepsi
+**18.30 WIB – 20.30 WIB**. Teks waktu belum ditentukan dihilangkan.
+
+Ucapan ditampilkan dalam panel enam kartu dengan gerakan kontinu dari atas ke
+bawah. Galeri menampilkan tiga foto sekaligus dan bergerak kontinu dari kanan
+ke kiri. Keduanya mengulang tanpa jeda antar-kloter. Tombol panah tersedia;
+tombol jeda/putar dihilangkan. Autoplay berjalan ketika panel terlihat dan tab
+aktif, serta menghormati pengaturan pengurangan gerakan. Interaksi geser manual
+menunda autoplay 15 detik agar tamu dapat membaca atau melihat foto.
+
+Untuk push tanpa deploy, integrasi repo GitHub pada layanan Helipod
+`forevarwithcesar` dan layanan uji `unused-domain-test` dilepas sementara.
+Container LIVE, domain, volume, dan data tidak diubah. Hubungkan kembali
+`cesartputra/temu`, branch `main`, hanya saat deploy berikutnya disetujui.
+
