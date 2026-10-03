@@ -14,3 +14,8 @@ test('calendar text escapes newlines and folds long Unicode lines without splitt
  assert.ok(!content.includes('�'));
 });
 test('calendar rejects missing dates',()=>{assert.throws(()=>create({date:''}),/Tanggal/);});
+test('Native calendar links retain WIB times and hide ceremony for reception-only guests',()=>{
+ const {links}=require('../dist/invitation2-calendar.js');const base={date:'2026-11-21',wedding:{ceremonyTime:'15.30 WIB - 17.00 WIB',receptionTime:'18.30 WIB - 20.30 WIB'},calendarPath:'/api/invite/calendar.ics?g=test&c=calendar-signature',origin:'https://example.com'};
+ const reception=links(base),both=links({...base,akad:true});assert.ok(reception.apple.startsWith('webcal://example.com/api/invite/calendar.ics?'));assert.ok(reception.android.includes('android.intent.action.INSERT'));
+ assert.equal(new URL(reception.google).searchParams.get('dates'),'20261121T113000Z/20261121T133000Z');assert.ok(!new URL(reception.google).searchParams.get('details').includes('Akad'));assert.equal(new URL(both.google).searchParams.get('dates'),'20261121T083000Z/20261121T133000Z');
+});

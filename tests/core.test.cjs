@@ -40,3 +40,13 @@ test('Nomor WhatsApp tidak valid tidak mengubah data dan tidak membuka Ubah',asy
  assert.ok(vm.runInContext("document.querySelector('#whatsapp-phone-status').textContent.length",c)>0);
  assert.equal(vm.runInContext("document.querySelector('#modal-title').textContent",c),'Nomor WhatsApp tamu');
 });
+test('Dropdown kedatangan defaults to remaining quota and camera is retained after verification',async()=>{
+ const c=await context();await vm.runInContext("commit(d=>d.guests.push({id:'drop',code:'qr',name:'Tamu',group:'',quota:3,arrived:0,active:true,akad:'y'}))",c);
+ vm.runInContext("let stops=0;stream={active:true,getTracks:()=>[{stop(){stops++}}]};showGuest(db.guests[0]);",c);
+ let html=vm.runInContext("document.querySelector('#modal-body').innerHTML",c);assert.ok(html.includes('<select id="count"'));assert.ok(html.indexOf('value="3"')<html.indexOf('value="2"'));assert.ok(html.indexOf('value="2"')<html.indexOf('value="1"'));assert.equal(vm.runInContext('stops',c),0);
+ await vm.runInContext("checkIn('drop',2)",c);vm.runInContext('showGuest(db.guests[0])',c);html=vm.runInContext("document.querySelector('#modal-body').innerHTML",c);assert.ok(html.includes('value="1"'));assert.ok(!html.includes('value="2"'));vm.runInContext('stopCamera()',c);assert.equal(vm.runInContext('stops',c),1);
+});
+test('Scanner keeps scheduling frames and requires QR to leave view before reaccepting same code',async()=>{
+ const c=await context();vm.runInContext(`let frames=0,hits=0,currentQr={data:'abc'};requestAnimationFrame=()=>frames++;jsQR=()=>currentQr;scanning=true;showGuest=()=>hits++;ctx.drawImage=()=>{};ctx.getImageData=()=>({data:[],width:1,height:1});Object.assign(document.querySelector('#video'),{readyState:2,videoWidth:100,videoHeight:100});document.querySelector('#modal').open=false;scan(200);scan(400);currentQr=null;scan(600);currentQr={data:'abc'};scan(800);`,c);
+ assert.equal(vm.runInContext('hits',c),2);assert.equal(vm.runInContext('frames',c),4);
+});

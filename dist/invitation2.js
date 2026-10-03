@@ -66,6 +66,7 @@ function showPersonal(info){
     $('#rsvp-count-wrap').hidden=info.rsvp.status!=='attending';
     $('#rsvp-status').textContent=info.rsvp.status==='attending'?'Tersimpan: hadir '+info.rsvp.count+' orang.':'Tersimpan: belum bisa hadir.';
   }
+  const qr=qrcode(0,'M');qr.addData(info.guest.qr);qr.make();$('#personal-qr').innerHTML='<h3>'+safeText(recipient(info.guest))+'</h3>'+qr.createSvgTag(5,20);
   if(info.wish)$('#wish-message').value=info.wish.message;
 }
 let invitationOpened=false;
@@ -92,21 +93,17 @@ let wishScroller=null;
 function wishCard(wish){return '<article class="wish-card"><strong>'+safeText(wish.name)+'</strong><span class="wish-attendance '+(['attending','declined'].includes(wish.status)?wish.status:'pending')+'">'+(wish.status==='attending'?'✓ Konfirmasi hadir':wish.status==='declined'?'Tidak bisa hadir':'Belum konfirmasi')+'</span><time>'+safeText(new Date(wish.updated).toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'}))+'</time><p tabindex="0">'+safeText(wish.message)+'</p></article>';}
 function renderWishes(wishes){
  wishScroller?.destroy();wishScroller=null;
- const list=$('#wish-list'),groups=TemuInviteScroll.batches(wishes,6);
- $('#wish-controls').hidden=groups.length<2;
+ const list=$('#wish-list'),groups=wishes.map(wish=>[wish]);
  if(!groups.length){list.innerHTML='<p>Belum ada doa. Jadilah yang pertama mengirimkan ucapan hangat.</p>';list.classList.remove('has-pages');return;}
  list.classList.add('has-pages');
- // Reversed physical order makes advancing a batch move the cards downwards.
- list.innerHTML=groups.map((group,i)=>'<div class="wish-page" data-batch="'+i+'" role="group" aria-label="Kloter ucapan '+(i+1)+'">'+group.map(wishCard).join('')+'</div>').reverse().join('');
- if(groups.length>1){const clone=list.lastElementChild.cloneNode(true);clone.dataset.clone='1';clone.setAttribute('aria-hidden','true');clone.inert=true;list.prepend(clone);}
- const pages=[...list.querySelectorAll('.wish-page:not([data-clone])')].reverse();
- const stops=()=>pages.map(page=>page.offsetTop).concat(groups.length>1?[0]:[]);
- wishScroller=TemuInviteScroll.create({viewport:list,axis:'y',speed:28,stops});
+ list.innerHTML=wishes.map(wishCard).join('');
+ const cards=[...list.children];
+ const clone=document.createElement('div');clone.className='wish-loop-copy';clone.setAttribute('aria-hidden','true');clone.inert=true;clone.innerHTML=cards.map(card=>card.outerHTML).join('');list.append(clone);
+ wishScroller=TemuInviteScroll.create({viewport:list,axis:'x',speed:26,stops:()=>cards.map(card=>card.offsetLeft).concat(clone.offsetLeft)});
  requestAnimationFrame(()=>wishScroller?.reset());
 }
-$('#wish-prev').addEventListener('click',()=>wishScroller?.previous());$('#wish-next').addEventListener('click',()=>wishScroller?.next());
-async function loadWishes(){try{const response=await fetch('/api/invite/wishes',{cache:'no-store',signal:AbortSignal.timeout(12000)}),data=await response.json();if(!response.ok)throw Error(data.error||'Doa belum dapat dimuat.');renderWishes(data.wishes);}catch(error){wishScroller?.destroy();wishScroller=null;$('#wish-list').classList.remove('has-pages');$('#wish-list').textContent=error.message;$('#wish-controls').hidden=true;}}
-async function loadInvitation(){accessAllowed=false;try{const params=new URLSearchParams(location.hash.slice(1)),guest=params.get('g'),key=params.get('k');if(!guest||!key)throw Error('Undangan ini hanya dapat dibuka melalui tautan unik yang dikirimkan kepada Anda.');personal={guest,key};const info=await invitePost('guest',personal);accessAllowed=true;const response=await fetch('/api/invite/public',{cache:'no-store',signal:AbortSignal.timeout(12000)});const data=await response.json();if(!response.ok||!data.event)throw Error(data.error||'Undangan belum tersedia.');const event=data.event,w=event.wedding||{};const legacy=w.firstName==='Cesar'&&w.secondName==='Revalina',first=legacy?'Reva':w.firstName||'Reva',second=legacy?'Cesar':w.secondName||'Cesar';$('#first-name').textContent=first;$('#second-name').textContent=second;$('#signature').textContent=first+' & '+second;$('#closing-names').textContent=first+' & '+second;$('#cover-date').textContent=dateText(event.date,{day:'numeric',month:'long',year:'numeric'});$('#event-date').textContent=dateText(event.date,{weekday:'long',day:'numeric',month:'long',year:'numeric'});$('#venue').textContent=w.venue||'Tempat akan diinformasikan';$('#address').textContent=w.address||'Bandung, Jawa Barat';setupCalendar(event,w);const map=safeMap(w.mapsURL);$('#maps-link').hidden=!map;if(map)$('#maps-link').href=map;countdown(event.date);document.title=first+' & '+second+' — Undangan Pernikahan';$('#load-error').hidden=true;showPersonal(info);loadWishes();}catch(error){accessAllowed=false;music.pause();musicToggle.hidden=true;$('#invitation').hidden=true;$('#guest-cover').hidden=true;$('#error-message').textContent=error.message||'Periksa koneksi dan coba lagi.';$('#load-error').hidden=false;}}
+async function loadWishes(){try{const response=await fetch('/api/invite/wishes',{cache:'no-store',signal:AbortSignal.timeout(12000)}),data=await response.json();if(!response.ok)throw Error(data.error||'Doa belum dapat dimuat.');renderWishes(data.wishes);}catch(error){wishScroller?.destroy();wishScroller=null;$('#wish-list').classList.remove('has-pages');$('#wish-list').textContent=error.message;}}
+async function loadInvitation(){accessAllowed=false;try{const params=new URLSearchParams(location.hash.slice(1)),guest=params.get('g'),key=params.get('k');if(!guest||!key)throw Error('Undangan ini hanya dapat dibuka melalui tautan unik yang dikirimkan kepada Anda.');personal={guest,key};const info=await invitePost('guest',personal);accessAllowed=true;const response=await fetch('/api/invite/public?g='+encodeURIComponent(personal.guest),{cache:'no-store',signal:AbortSignal.timeout(12000)});const data=await response.json();if(!response.ok||!data.event)throw Error(data.error||'Undangan belum tersedia.');const event=data.event,w=event.wedding||{};const legacy=w.firstName==='Cesar'&&w.secondName==='Revalina',first=legacy?'Reva':w.firstName||'Reva',second=legacy?'Cesar':w.secondName||'Cesar';$('#first-name').textContent=first;$('#second-name').textContent=second;$('#signature').textContent=first+' & '+second;$('#closing-names').textContent=first+' & '+second;$('#cover-date').textContent=dateText(event.date,{day:'numeric',month:'long',year:'numeric'});$('#event-date').textContent=dateText(event.date,{weekday:'long',day:'numeric',month:'long',year:'numeric'});$('#venue').textContent=w.venue||'Tempat akan diinformasikan';$('#address').textContent=w.address||'Bandung, Jawa Barat';setupSchedule(info.guest,w);setupGift(w);setupCalendar(event,w,info);const map=safeMap(w.mapsURL);$('#maps-link').hidden=!map;if(map)$('#maps-link').href=map;countdown(event.date);document.title=first+' & '+second+' — Undangan Pernikahan';$('#load-error').hidden=true;showPersonal(info);loadWishes();}catch(error){accessAllowed=false;music.pause();musicToggle.hidden=true;$('#invitation').hidden=true;$('#guest-cover').hidden=true;$('#error-message').textContent=error.message||'Periksa koneksi dan coba lagi.';$('#load-error').hidden=false;}}
 $('#retry').addEventListener('click',loadInvitation);loadInvitation();
 
 function setupPageMotion(){
@@ -144,14 +141,29 @@ function setupGallery(){
  const clone=pages[0].cloneNode(true);clone.setAttribute('aria-hidden','true');clone.inert=true;clone.querySelectorAll('[id]').forEach(el=>el.removeAttribute('id'));clone.classList.add('gallery-clone');gallery.append(clone);
  galleryScroller=TemuInviteScroll.create({viewport:gallery,axis:'x',speed:32,stops:()=>[...pages,clone].map(page=>page.offsetLeft)});
 }
-$('#gallery-prev').addEventListener('click',()=>galleryScroller?.previous());$('#gallery-next').addEventListener('click',()=>galleryScroller?.next());
+
 const viewer=$('#photo-viewer');let photoTrigger=null;
 galleryItems.forEach(item=>item.addEventListener('click',()=>{const photo=item.querySelector('img');photoTrigger=item;$('#photo-full').src=photo.currentSrc||photo.src;$('#photo-full').alt=photo.alt;$('#photo-caption').textContent=item.querySelector('span').textContent;viewer.showModal();}));
 $('#photo-close').addEventListener('click',()=>viewer.close());viewer.addEventListener('click',event=>{if(event.target===viewer){const rect=viewer.getBoundingClientRect();if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom)viewer.close();}});viewer.addEventListener('close',()=>photoTrigger?.focus({preventScroll:true}));
 
-function setupCalendar(event,wedding){
- if(calendarURL)URL.revokeObjectURL(calendarURL);
- const content=TemuInviteCalendar.create({date:event.date,location:wedding.venue||'Steikhaus Bandung',address:wedding.address||'Bandung, Jawa Barat',mapsURL:safeMap(wedding.mapsURL)});
- calendarURL=URL.createObjectURL(new Blob([content],{type:'text/calendar;charset=utf-8'}));
- $('#save-calendar').href=calendarURL;
+function setupSchedule(guest,wedding){
+ const show=(selector,raw)=>{const matches=String(raw||'').match(/(\d{1,2})[.:](\d{2}).*?(\d{1,2})[.:](\d{2})/);$(selector).innerHTML=matches?'<strong>'+matches[1]+'.'+matches[2]+' <span>WIB</span></strong><small>hingga '+matches[3]+'.'+matches[4]+' WIB</small>':safeText(raw||'Waktu akan diinformasikan');};
+ if(guest.akad==='y')show('#ceremony-time',wedding.ceremonyTime||'15.30 WIB - 17.00 WIB');else $('#ceremony-time').textContent='Family Only';
+ show('#reception-time',wedding.receptionTime||'18.30 WIB - 20.30 WIB');
+}
+function setupGift(w){
+ $('#gift').hidden=![w.giftBank,w.giftAccount,w.giftName].every(value=>typeof value==='string'&&value.trim());
+ for(const [selector,key] of [['#gift-bank','giftBank'],['#gift-account','giftAccount'],['#gift-name','giftName']])$(selector).textContent=w[key]||'';
+ $('#copy-account').onclick=async()=>{try{await navigator.clipboard.writeText(w.giftAccount);$('#gift-status').textContent='Nomor rekening disalin.';}catch{$('#gift-status').textContent='Pilih dan salin nomor rekening di atas.';}};
+}
+function setupCalendar(event,wedding,info){
+ const links=TemuInviteCalendar.links({date:event.date,wedding,akad:info.guest.akad==='y',calendarPath:info.guest.calendarPath,origin:location.origin});
+ const ios=/iPhone|iPad|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1),android=/Android/.test(navigator.userAgent);
+ $('#calendar-native').href=ios?links.apple:android?links.android:links.apple;
+ $('#calendar-native').textContent=ios?'Buka Apple Calendar':android?'Buka kalender Android':'Apple Calendar';
+ $('#calendar-google').href=links.google;
+ $('#calendar-description').textContent=info.guest.akad==='y'?'Simpan jadwal akad dan resepsi.':'Simpan jadwal resepsi.';
+ $('.calendar-hint').textContent=info.guest.akad==='y'?'Simpan jadwal akad dan resepsi agar tidak terlewat.':'Simpan jadwal resepsi agar tidak terlewat.';
+ $('#save-calendar').onclick=e=>{e.preventDefault();$('#calendar-choice').showModal();};
+ $('#calendar-close').onclick=()=>$('#calendar-choice').close();
 }

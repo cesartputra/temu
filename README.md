@@ -187,3 +187,12 @@ Container LIVE, domain, volume, dan data tidak diubah. Hubungkan kembali
 Revisi kartu V2: jarak antar-kloter konsisten, kartu ucapan bergaya kertas hangat,
 dan label kloter dihilangkan. Jam akad/resepsi ditonjolkan. Tombol kalender
 mengunduh berkas `.ics` berisi dua jadwal terpisah dalam zona waktu WIB.
+
+## Pembaruan undangan dan petugas — 4 Oktober 2026
+
+- Tamu memiliki kolom `akad`: `y` menampilkan jadwal akad, `n` menampilkan Family Only. Data lama serta impor CSV tanpa kolom akad memakai `n`. Pilihan tersedia pada Tambah/Ubah tamu, daftar, dan CSV (kolom opsional `akad`).
+- Gift diatur melalui Bank, Nomor rekening, dan Atas nama di Informasi acara; bagian tidak tampil sebelum ketiganya terisi. Nomor rekening dapat disalin.
+- Kalender membuka pilihan Apple Calendar (webcal/berlangganan), Android Calendar (intent INSERT), atau Google Calendar. Simpan harus dikonfirmasi pengguna. Browser dalam aplikasi dapat membatasi pembukaan aplikasi kalender; gunakan browser sistem atau pilihan Google Calendar. Kalender tamu akad n hanya berisi resepsi. URL kalender memakai tanda tangan dengan lingkup kalender, bukan kunci pengelola atau kunci buka undangan.
+- QR pribadi pada invitation2 berisi payload yang sama dengan QR buku tamu (`v`, `event`, `code`).
+- Foto mobile diperbesar; ucapan menggunakan carousel horizontal berulang tanpa panah, tinggi isi fleksibel dan teks membungkus. Gerakan berhenti sementara saat interaksi serta menghormati preferensi kurangi gerakan.
+- Check-in memakai pilihan jumlah menurun berdasarkan sisa kuota. Kamera tetap berjalan saat dialog hasil terbuka; pemindaian ditahan sampai dialog ditutup dan QR lama keluar dari bingkai. Tombol Hentikan kamera menghentikan stream. Berpindah dari halaman pindai atau menyembunyikan tab juga menghentikannya untuk membatasi pemakaian kamera.

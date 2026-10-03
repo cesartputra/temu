@@ -3,7 +3,7 @@ import argparse, base64, copy, hashlib, hmac, json, os, re, secrets, sqlite3, te
 from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import urlsplit, parse_qs
+from urllib.parse import urlsplit, parse_qs, urlencode
 from http.cookies import SimpleCookie
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parent))
@@ -23,7 +23,7 @@ def validate(s):
     if 'wedding' in e:
         if not isinstance(e['wedding'],dict):raise ValueError('Detail pernikahan tidak valid.')
         for key,value in e['wedding'].items():
-            if key not in ('firstName','secondName','ceremonyTime','receptionTime','venue','address','mapsURL','publicOrigin') or not isinstance(value,str) or len(value)>500:raise ValueError('Detail pernikahan tidak valid.')
+            if key not in ('firstName','secondName','ceremonyTime','receptionTime','venue','address','mapsURL','publicOrigin','giftBank','giftAccount','giftName') or not isinstance(value,str) or len(value)>500:raise ValueError('Detail pernikahan tidak valid.')
         for key in ('mapsURL','publicOrigin'):
             value=e['wedding'].get(key,'')
             if value and (urlsplit(value).scheme!='https' or not urlsplit(value).netloc or urlsplit(value).username):raise ValueError('Tautan harus HTTPS.')
@@ -37,6 +37,7 @@ def validate(s):
         if not g['id'] or not g['code'] or not g['name'].strip() or type(g.get('active')) is not bool: raise ValueError('Tamu tidak valid.')
         if type(g.get('quota')) is not int or not 1<=g['quota']<=1000 or type(g.get('arrived')) is not int or not 0<=g['arrived']<=g['quota']: raise ValueError('Kuota tidak valid.')
         if g['id'] in ids or g['code'] in codes: raise ValueError('Kode / ID tamu duplikat.')
+        if 'akad' in g and g['akad'] not in ('y','n'):raise ValueError('Pilihan akad harus y atau n.')
         if 'phone' in g and (not isinstance(g['phone'],str) or (g['phone'] and not re.fullmatch(r'[1-9]\d{7,14}',g['phone']))):raise ValueError('Nomor WhatsApp tidak valid.')
         if 'deleted' in g and (type(g['deleted']) is not bool or (g['deleted'] and (g['active'] or g['name']!='Tamu dihapus' or g.get('phone') or g['group']))):raise ValueError('Tamu yang dihapus tidak valid.')
         ids.add(g['id']);codes.add(g['code'])
@@ -201,10 +202,14 @@ class Database:
             return {'state':state,'revision':revision,'results':results,'backupAt':datetime.fromtimestamp(self.last_backup,timezone.utc).isoformat() if self.last_backup else None,'backupError':self.backup_error}
     def events(self):
         with self.connect() as c:return [{'id':r[0],'name':json.loads(r[1])['event']['name'],'updated':r[2]} for r in c.execute('SELECT id,state,updated FROM events ORDER BY updated DESC')]
-    def public_event(self):
+    def public_event(self,device=None,guest=None):
         with self.connect() as c:rows=c.execute('SELECT state FROM events LIMIT 2').fetchall()
         if len(rows)!=1:return None
-        event=json.loads(rows[0][0])['event']
+        state=json.loads(rows[0][0]);event=copy.deepcopy(state['event'])
+        hashed=hashlib.sha256((device or '').encode()).hexdigest()
+        with self.connect() as c:bound=[row[0] for row in c.execute('SELECT guest FROM invitation_devices WHERE device_hash=?',(hashed,))]
+        allowed=any(g['id'] in bound and (guest is None or g['id']==guest) and g.get('akad')=='y' and g['active'] and not g.get('deleted') for g in state['guests'])
+        if not allowed:event.setdefault('wedding',{})['ceremonyTime']='Family Only'
         return {key:event.get(key,{} if key=='wedding' else '') for key in ('name','date','wedding')}
     def invite_signature(self,c,event,guest):
         secret=c.execute('SELECT value FROM app_secrets WHERE name=?',('invite-signing',)).fetchone()[0]
@@ -212,6 +217,17 @@ class Database:
         suffix=':'+version[0] if version else ''
         digest=hmac.new(secret.encode(),('temu-invite-v1:'+event+':'+guest+suffix).encode(),hashlib.sha256).digest()
         return base64.urlsafe_b64encode(digest).decode().rstrip('=')
+    def calendar_signature(self,c,event,guest):
+        secret=c.execute('SELECT value FROM app_secrets WHERE name=?',('invite-signing',)).fetchone()[0]
+        value=hmac.new(secret.encode(),('calendar-v1:'+event+':'+guest['id']+':'+guest['code']).encode(),hashlib.sha256).digest()
+        return base64.urlsafe_b64encode(value).decode().rstrip('=')
+    def guest_calendar(self,guest,signature):
+        from calendar_feed import calendar_feed
+        with self.connect() as c:
+            for event,raw in c.execute('SELECT id,state FROM events LIMIT 2'):
+                state=json.loads(raw);g=next((g for g in state['guests'] if g['id']==guest and g['active'] and not g.get('deleted')),None)
+                if g and hmac.compare_digest(self.calendar_signature(c,event,g),signature):return calendar_feed(state['event'],g.get('akad')=='y')
+        raise Denied('Kalender tidak tersedia.')
     def invite_guest(self,guest,key):
         if not isinstance(guest,str) or not 1<=len(guest)<=200 or not isinstance(key,str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}',key):raise ValueError('Tautan tamu tidak valid.')
         with self.connect() as c:
@@ -223,7 +239,7 @@ class Database:
             if not found:raise ValueError('Undangan tamu tidak aktif.')
             rsvp=c.execute('SELECT status,count,updated FROM rsvps WHERE event=? AND guest=?',(event,guest)).fetchone()
             wish=c.execute('SELECT message,updated FROM wishes WHERE event=? AND guest=?',(event,guest)).fetchone()
-            return {'event':event,'guest':{'name':found['name'],'quota':found['quota']},'rsvp':{'status':rsvp[0],'count':rsvp[1],'updated':rsvp[2]} if rsvp else None,'wish':{'message':wish[0],'updated':wish[1]} if wish else None}
+            return {'event':event,'guest':{'name':found['name'],'quota':found['quota'],'akad':found.get('akad','n'),'qr':encode({'v':1,'event':event,'code':found['code']}),'calendarPath':'/api/invite/calendar.ics?'+urlencode({'g':guest,'c':self.calendar_signature(c,event,found)})},'rsvp':{'status':rsvp[0],'count':rsvp[1],'updated':rsvp[2]} if rsvp else None,'wish':{'message':wish[0],'updated':wish[1]} if wish else None}
     def bind_invitation_device(self,guest,key,device):
         # Validate before claiming; serialize first-open races across processes too.
         with self.lock:
@@ -433,11 +449,16 @@ def make_handler(database,token,allowed_hosts):
         def do_GET(self):
             if not self.safe_host():return self.reply(403,{'error':'Host tidak diizinkan.'})
             path=urlsplit(self.path).path
+            if path=='/api/invite/calendar.ics':
+                query=parse_qs(urlsplit(self.path).query)
+                try:content=database.guest_calendar(query.get('g',[''])[0],query.get('c',[''])[0]).encode()
+                except (Denied,ValueError):return self.reply(403,{'error':'Kalender tidak tersedia.'})
+                self.send_response(200);self.send_header('Content-Type','text/calendar; charset=utf-8');self.send_header('Content-Disposition','inline');self.send_header('Cache-Control','no-store');self.send_header('Content-Length',str(len(content)));self.end_headers();self.wfile.write(content);return
             if path in ('/api/invite/public','/api/invite/wishes') or path.startswith('/api/invite/public-media/'):
-                try:database.require_invitation_device(self.device_token())
+                try:database.require_invitation_device(self.device_token(),parse_qs(urlsplit(self.path).query).get('g',[None])[0])
                 except Denied as error:return self.reply(403,{'error':str(error)})
             if path=='/api/invite/public':
-                event=database.public_event()
+                event=database.public_event(self.device_token(),parse_qs(urlsplit(self.path).query).get('g',[None])[0])
                 return self.reply(200,{'event':event}) if event else self.reply(404,{'error':'Undangan belum tersedia.'})
             if path=='/api/invite/wishes':return self.reply(200,{'wishes':database.public_wishes()})
             if path.startswith('/api/invite/public-media/'):return self.serve_invitation_media(path.rsplit('/',1)[-1])
@@ -459,7 +480,7 @@ def make_handler(database,token,allowed_hosts):
                 return self.reply(404,{'error':'Tidak ditemukan.'})
             if path in ('/invite','/invite/','/invite.html','/invitation2','/invitation2/'):
                 try:
-                    database.require_invitation_device(self.device_token())
+                    database.require_invitation_device(self.device_token(),parse_qs(urlsplit(self.path).query).get('g',[None])[0])
                     opened=parse_qs(urlsplit(self.path).query).get('open')==['1']
                 except Denied:opened=False
                 version2=path in ('/invitation2','/invitation2/')

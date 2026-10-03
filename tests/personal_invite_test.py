@@ -17,7 +17,7 @@ class PersonalInvitationTests(unittest.TestCase):
  def test_unique_link_rsvp_wish_and_overview(self):
   link=self.post('/api/invite/admin/link',{'event':'wedding','guest':'g'},True)
   self.assertEqual(len(link['key']),43);self.assertEqual(link,self.post('/api/invite/admin/link',{'event':'wedding','guest':'g'},True))
-  guest=self.post('/api/invite/guest',link);self.assertEqual(guest['guest'],{'name':'Tamu Uji','quota':2});self.assertIsNone(guest['rsvp'])
+  guest=self.post('/api/invite/guest',link);self.assertEqual({k:guest['guest'][k] for k in ('name','quota')},{'name':'Tamu Uji','quota':2});self.assertEqual(guest['guest']['akad'],'n');self.assertEqual(json.loads(guest['guest']['qr']),{'v':1,'event':'wedding','code':'qr'});self.assertIsNone(guest['rsvp'])
   with self.assertRaises(urllib.error.HTTPError) as failure:self.post('/api/invite/rsvp',{**link,'status':'attending','count':3})
   self.assertEqual(failure.exception.code,400);failure.exception.close()
   self.post('/api/invite/rsvp',{**link,'status':'attending','count':2})
@@ -100,5 +100,26 @@ class PersonalInvitationTests(unittest.TestCase):
   self.db.bind_invitation_device('g',new['key'],'C'*43)
   with self.db.connect() as c:self.assertEqual(json.loads(c.execute('SELECT state FROM events').fetchone()[0])['guests'][0]['code'],self.state['guests'][0]['code'])
   self.assertEqual(server.Database(self.tmp.name).guest_link('wedding','g'),new)
+
+ def test_guest_schedule_and_calendar_are_scoped_and_updated(self):
+  state=seed();state['event']['date']='2026-11-21';state['event']['wedding']={'ceremonyTime':'15.30 WIB - 17.00 WIB','receptionTime':'18.30 WIB - 20.30 WIB','giftBank':'Bank Uji','giftAccount':'00123','giftName':'Contoh'}
+  with self.db.connect() as c:c.execute('UPDATE events SET state=?',(json.dumps(state),))
+  link=self.db.guest_link('wedding','g');info=self.post('/api/invite/guest',link)
+  with self.opener.open(self.origin+'/api/invite/public?g=g') as response:details=json.load(response)['event']['wedding']
+  self.assertEqual(details['ceremonyTime'],'Family Only');self.assertEqual(details['giftAccount'],'00123')
+  with urllib.request.urlopen(self.origin+info['guest']['calendarPath']) as response:calendar=response.read().decode()
+  self.assertNotIn('SUMMARY:Akad',calendar);self.assertIn('DTSTART:20261121T113000Z',calendar)
+  with self.assertRaises(urllib.error.HTTPError) as error:urllib.request.urlopen(self.origin+info['guest']['calendarPath']+'tampered')
+  self.assertEqual(error.exception.code,403);error.exception.close()
+  state['guests'][0]['akad']='y'
+  with self.db.connect() as c:c.execute('UPDATE events SET state=?',(json.dumps(state),))
+  with self.opener.open(self.origin+'/api/invite/public?g=g') as response:details=json.load(response)['event']['wedding']
+  self.assertEqual(details['ceremonyTime'],'15.30 WIB - 17.00 WIB')
+  with urllib.request.urlopen(self.origin+info['guest']['calendarPath']) as response:calendar=response.read().decode()
+  self.assertIn('SUMMARY:Akad',calendar);self.assertIn('DTSTART:20261121T083000Z',calendar)
+  state['guests'][0]['active']=False
+  with self.db.connect() as c:c.execute('UPDATE events SET state=?',(json.dumps(state),))
+  with self.assertRaises(urllib.error.HTTPError) as error:urllib.request.urlopen(self.origin+info['guest']['calendarPath'])
+  self.assertEqual(error.exception.code,403);error.exception.close()
 
 if __name__=='__main__':unittest.main()
