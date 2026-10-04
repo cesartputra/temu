@@ -20,6 +20,12 @@ function whatsappURL(phone,text){const normalized=normalizePhone(phone);if(!norm
 function qrFile(guest,event){return new Promise((resolve,reject)=>{
  try{const qr=qrcode(0,'M');qr.addData(JSON.stringify({v:1,event:event.id,code:guest.code}));qr.make();const count=qr.getModuleCount(),quiet=4,scale=12,canvas=document.createElement('canvas');canvas.width=canvas.height=(count+quiet*2)*scale;const ctx=canvas.getContext('2d');if(!ctx)throw Error('Gambar QR tidak dapat disiapkan.');ctx.fillStyle='#ffffff';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.fillStyle='#000000';for(let y=0;y<count;y++)for(let x=0;x<count;x++)if(qr.isDark(y,x))ctx.fillRect((x+quiet)*scale,(y+quiet)*scale,scale,scale);canvas.toBlob(blob=>blob?resolve(new File([blob],'undangan-'+guest.code+'.png',{type:'image/png'})):reject(Error('Gambar QR tidak dapat dibuat.')),'image/png');}catch(e){reject(e);}
 });}
-root.TemuInvitations={defaultTemplate,normalizePhone,message,whatsappURL,qrFile};
+async function copyQR(file,text=null){
+ if(!navigator.clipboard?.write||typeof ClipboardItem==='undefined')throw Error('Browser belum mendukung salin gambar. Gunakan Unduh QR PNG dan Salin teks saja.');
+ const data={'image/png':file};
+ if(text!==null)data['text/plain']=new Blob([text],{type:'text/plain'});
+ await navigator.clipboard.write([new ClipboardItem(data)]);
+}
+root.TemuInvitations={defaultTemplate,normalizePhone,message,whatsappURL,qrFile,copyQR};
 if(typeof module!=='undefined')module.exports=root.TemuInvitations;
 })(globalThis);

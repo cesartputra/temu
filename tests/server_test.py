@@ -18,6 +18,12 @@ class ServerTests(unittest.TestCase):
   self.db=server.Database(self.tmp.name)
   pulled=self.db.sync({'event':'wedding','operations':[]})['state'];self.assertEqual(pulled['guests'][0]['vip'],'y')
   bad=copy.deepcopy(pulled);bad['guests'][0]['vip']='yes';self.assertRaises(ValueError,server.validate,bad)
+ def test_whatsapp_status_sync_and_timestamp_validation(self):
+  op=change(self.initial,0);op['changes'][0]['after']['whatsappOpenedAt']='2026-10-04T12:00:00Z'
+  result=self.db.sync({'event':'wedding','operations':[op]});self.assertTrue(result['results'][0]['ok'])
+  self.assertEqual(result['state']['guests'][0]['whatsappOpenedAt'],'2026-10-04T12:00:00Z')
+  self.assertNotIn('whatsappSentAt',result['state']['guests'][0])
+  bad=copy.deepcopy(result['state']);bad['guests'][0]['whatsappSentAt']='invalid';self.assertRaises(ValueError,server.validate,bad)
  def test_retry_is_idempotent_and_survives_restart(self):
   op=change(self.initial);first=self.db.sync({'event':'wedding','operations':[op]});self.db=server.Database(self.tmp.name);retry=self.db.sync({'event':'wedding','operations':[op]});self.assertEqual(retry['state']['guests'][0]['arrived'],1);self.assertEqual(len(retry['state']['logs']),1);self.assertEqual(first['revision'],retry['revision'])
  def test_two_disconnected_devices_create_visible_conflict(self):

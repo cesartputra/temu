@@ -37,6 +37,10 @@ def validate(s):
         if not g['id'] or not g['code'] or not g['name'].strip() or type(g.get('active')) is not bool: raise ValueError('Tamu tidak valid.')
         if type(g.get('quota')) is not int or not 1<=g['quota']<=1000 or type(g.get('arrived')) is not int or not 0<=g['arrived']<=g['quota']: raise ValueError('Kuota tidak valid.')
         if g['id'] in ids or g['code'] in codes: raise ValueError('Kode / ID tamu duplikat.')
+        for key in ('whatsappOpenedAt','whatsappSentAt'):
+            if g.get(key) is not None:
+                if not isinstance(g[key],str) or len(g[key])>64:raise ValueError('Tanggal WhatsApp tidak valid.')
+                datetime.fromisoformat(g[key].replace('Z','+00:00'))
         if 'vip' in g and g['vip'] not in ('y','n'):raise ValueError('Pilihan VIP harus y atau n.')
         if 'akad' in g and g['akad'] not in ('y','n'):raise ValueError('Pilihan akad harus y atau n.')
         if 'phone' in g and (not isinstance(g['phone'],str) or (g['phone'] and not re.fullmatch(r'[1-9]\d{7,14}',g['phone']))):raise ValueError('Nomor WhatsApp tidak valid.')

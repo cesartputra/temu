@@ -200,3 +200,7 @@ mengunduh berkas `.ics` berisi dua jadwal terpisah dalam zona waktu WIB.
 Cetak QR dan tombol **Atur Akad Y/N** pada Daftar tamu menyediakan pilihan semua tamu, berdasarkan kelompok, atau centang satu per satu. Pencarian pada pilihan manual tidak membuang centang tamu lain. Cetak hanya mencakup undangan aktif; perubahan akad berlaku hanya pada tamu terpilih tanpa mengganti QR, kuota, atau kehadiran.
 
 Tamu memiliki status **VIP Y/N**, default N pada data lama atau CSV tanpa kolom `vip`. Status tersedia pada formulir tambah/ubah dan kolom daftar tamu; tanda VIP tampil saat verifikasi check-in. Tombol **Atur VIP Y/N** mendukung semua tamu, kelompok, atau pilihan satu per satu. CSV mengimpor/mengekspor kolom `vip` (y/n). Status ini tidak mengubah QR, akad, kuota, atau kehadiran.
+
+VIP dan Akad dapat diubah melalui toggle pada kolom daftar tamu (memerlukan akses pengelola). Kolom WhatsApp membedakan belum dibuka, sudah buka WhatsApp, dan sudah kirim yang ditandai pengelola. Tautan WhatsApp hanya mengisi teks; gunakan **Salin teks + gambar QR** lalu tempel. Jika WhatsApp memilih gambar saja, salin teks terpisah untuk caption; unduh PNG tetap tersedia jika browser menolak clipboard gambar. Tidak ada pengiriman otomatis atau konfirmasi terkirim dari WhatsApp.
+
+Filter kelompok pada Daftar tamu dapat digabungkan dengan pencarian dan filter kehadiran; tersedia pilihan semua kelompok dan tanpa kelompok. Pilihan kelompok tetap tersimpan saat data diperbarui, kecuali kelompok itu sudah tidak ada.
