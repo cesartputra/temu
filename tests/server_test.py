@@ -10,6 +10,14 @@ def change(before,amount=1):
 class ServerTests(unittest.TestCase):
  def setUp(self):self.tmp=tempfile.TemporaryDirectory();self.db=server.Database(self.tmp.name);self.initial=seed();self.db.sync({'event':'wedding','operations':[bootstrap(self.initial)]})
  def tearDown(self):self.tmp.cleanup()
+ def test_vip_survives_sync_and_invalid_value_is_rejected(self):
+  op=change(self.initial,0);op['changes'][0]['after']['vip']='y'
+  result=self.db.sync({'event':'wedding','operations':[op]})
+  self.assertTrue(result['results'][0]['ok']);self.assertEqual(result['state']['guests'][0]['vip'],'y')
+  self.assertEqual(result['state']['guests'][0]['code'],self.initial['guests'][0]['code'])
+  self.db=server.Database(self.tmp.name)
+  pulled=self.db.sync({'event':'wedding','operations':[]})['state'];self.assertEqual(pulled['guests'][0]['vip'],'y')
+  bad=copy.deepcopy(pulled);bad['guests'][0]['vip']='yes';self.assertRaises(ValueError,server.validate,bad)
  def test_retry_is_idempotent_and_survives_restart(self):
   op=change(self.initial);first=self.db.sync({'event':'wedding','operations':[op]});self.db=server.Database(self.tmp.name);retry=self.db.sync({'event':'wedding','operations':[op]});self.assertEqual(retry['state']['guests'][0]['arrived'],1);self.assertEqual(len(retry['state']['logs']),1);self.assertEqual(first['revision'],retry['revision'])
  def test_two_disconnected_devices_create_visible_conflict(self):
