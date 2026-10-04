@@ -196,3 +196,5 @@ mengunduh berkas `.ics` berisi dua jadwal terpisah dalam zona waktu WIB.
 - QR pribadi pada invitation2 berisi payload yang sama dengan QR buku tamu (`v`, `event`, `code`).
 - Foto mobile diperbesar; ucapan menggunakan carousel horizontal berulang tanpa panah, tinggi isi fleksibel dan teks membungkus. Gerakan berhenti sementara saat interaksi serta menghormati preferensi kurangi gerakan.
 - Check-in memakai pilihan jumlah menurun berdasarkan sisa kuota. Kamera tetap berjalan saat dialog hasil terbuka; pemindaian ditahan sampai dialog ditutup dan QR lama keluar dari bingkai. Tombol Hentikan kamera menghentikan stream. Berpindah dari halaman pindai atau menyembunyikan tab juga menghentikannya untuk membatasi pemakaian kamera.
+
+Cetak QR dan tombol **Atur Akad Y/N** pada Daftar tamu menyediakan pilihan semua tamu, berdasarkan kelompok, atau centang satu per satu. Pencarian pada pilihan manual tidak membuang centang tamu lain. Cetak hanya mencakup undangan aktif; perubahan akad berlaku hanya pada tamu terpilih tanpa mengganti QR, kuota, atau kehadiran.

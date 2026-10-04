@@ -42,7 +42,37 @@ function printedGuestName(g){return g.name+(g.quota===2?' & Pasangan':g.quota>2?
 function printMarkup(gs){const date=db.event.date?new Date(db.event.date+'T12:00:00').toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'}):'Tanggal menyusul';const sheets=[];for(let i=0;i<gs.length;i+=9)sheets.push(`<section class="print-sheet">${gs.slice(i,i+9).map(g=>`<article class="print-card"><div class="print-card-heading"><span>CELEBRATE OUR WEDDING</span><strong>#foREVArwithCESAR</strong></div><div class="print-card-body"><div class="print-card-copy"><span>UNDANGAN UNTUK</span><h2>${esc(printedGuestName(g))}</h2><p>${g.quota} orang</p></div><div class="print-card-qr">${qrSVG(g)}</div></div><div class="print-card-footer"><span>${esc(date)}</span><span>jangan lupa dibawa QR ini ya😉</span></div></article>`).join('')}</section>`);return sheets.join('');}
 function printGuests(gs){if(!gs.length)return toast('Tambahkan tamu terlebih dahulu.');$('#print-area').innerHTML=printMarkup(gs);window.print();}
 $('.brand').onclick=e=>{e.preventDefault();page('pindai');};
-$('#print-all').onclick=async()=>{if(await admin())printGuests(db.guests.filter(g=>g.active));};
+function bulkGuests(kind){return db.guests.filter(g=>!g.deleted&&(kind!=='print'||g.active));}
+function bulkSelection(kind,mode,group,ids){return bulkGuests(kind).filter(g=>mode==='all'||mode==='group'&&g.group===group||mode==='manual'&&ids.has(g.id));}
+async function updateAkad(ids,value){
+ if(!['y','n'].includes(value)||!ids.length)throw Error('Pilih tamu dan status akad terlebih dahulu.');
+ await commit(d=>{for(const id of new Set(ids)){const g=d.guests.find(g=>g.id===id&&!g.deleted);if(!g)throw Error('Daftar tamu berubah. Buka kembali pilihan tamu.');g.akad=value;}});
+}
+function showBulkGuests(kind){
+ const guests=bulkGuests(kind);if(!guests.length)return toast('Belum ada tamu yang dapat dipilih.');
+ const groups=[...new Set(guests.map(g=>g.group))].sort((a,b)=>a.localeCompare(b,'id'));
+ const selected=new Set();
+ modal(kind==='print'?'Pilih tamu untuk cetak QR':'Atur undangan akad',`<form id="bulk-form" class="bulk-form"><label>Pilih tamu<select id="bulk-mode"><option value="all">Semua tamu</option><option value="group">Berdasarkan kelompok</option><option value="manual">Pilih satu per satu</option></select></label><label id="bulk-group-label" hidden>Kelompok<select id="bulk-group">${groups.map(g=>`<option value="${esc(g)}">${esc(g)||'Tanpa kelompok'}</option>`).join('')}</select></label><label id="bulk-search-label" hidden>Cari nama atau kelompok<input id="bulk-search" type="search" placeholder="Cari tamu…"></label><p id="bulk-summary" class="bulk-summary" role="status"></p><div id="bulk-list" class="bulk-list" aria-label="Daftar pilihan tamu"></div>${kind==='akad'?'<label>Status akad untuk tamu terpilih<select id="bulk-akad"><option value="y">Y — Tampilkan jam akad</option><option value="n">N — Family Only</option></select></label><p class="hint">Hanya status akad yang diubah. QR, jumlah undangan, dan kehadiran tetap sama.</p>':'<p class="hint">QR tamu aktif yang dipilih dicetak 9 kartu per halaman landscape.</p>'}<button id="bulk-submit" class="primary">${kind==='print'?'Cetak QR terpilih':'Simpan status akad'}</button></form>`);
+ $('#bulk-mode').value='all';$('#bulk-group').value=groups[0];$('#bulk-search').value='';
+ const chosen=()=>bulkSelection(kind,$('#bulk-mode').value,$('#bulk-group').value,selected);
+ function refresh(){
+  const mode=$('#bulk-mode').value,chosenIds=new Set(chosen().map(g=>g.id)),q=$('#bulk-search').value.trim().toLocaleLowerCase('id');
+  $('#bulk-group-label').hidden=mode!=='group';$('#bulk-search-label').hidden=mode!=='manual';
+  const listed=(mode==='manual'?bulkGuests(kind):chosen()).filter(g=>mode!=='manual'||(g.name+' '+g.group).toLocaleLowerCase('id').includes(q));
+  $('#bulk-summary').textContent=chosenIds.size+' dari '+bulkGuests(kind).length+' undangan dipilih';$('#bulk-submit').disabled=chosenIds.size===0;
+  $('#bulk-list').innerHTML=listed.map(g=>`<label class="bulk-row"><input type="checkbox" data-id="${esc(g.id)}" ${chosenIds.has(g.id)?'checked':''} ${mode!=='manual'?'disabled':''}><span><strong>${esc(g.name)}</strong><small>${esc(g.group)||'Tanpa kelompok'} · ${g.quota} orang · Akad ${g.akad==='y'?'Y':'N'}</small></span></label>`).join('')||'<p class="hint">Tidak ada tamu yang cocok.</p>';
+ }
+ $('#bulk-mode').onchange=refresh;$('#bulk-group').onchange=refresh;$('#bulk-search').oninput=refresh;
+ $('#bulk-list').onchange=e=>{const input=e.target;if(!input.dataset.id||$('#bulk-mode').value!=='manual')return;if(input.checked)selected.add(input.dataset.id);else selected.delete(input.dataset.id);refresh();};
+ $('#bulk-form').onsubmit=async e=>{
+  e.preventDefault();const picked=chosen();if(!picked.length)return toast('Pilih setidaknya satu tamu.');
+  const button=$('#bulk-submit');button.disabled=true;
+  try{if(kind==='print'){$('#modal').close();printGuests(picked);}else{await updateAkad(picked.map(g=>g.id),$('#bulk-akad').value);$('#modal').close();toast('Status akad '+picked.length+' undangan tersimpan.');}}
+  catch(error){toast(error.message);}finally{button.disabled=false;}
+ };refresh();
+}
+$('#print-all').onclick=async()=>{if(await admin())showBulkGuests('print');};
+$('#bulk-akad-guest').onclick=async()=>{if(await admin())showBulkGuests('akad');};
 async function checkIn(id,count){await commit(d=>{const g=d.guests.find(x=>x.id===id);if(!g||!g.active||!Number.isInteger(count)||count<1||count>g.quota-g.arrived)throw Error('Jumlah kedatangan melebihi sisa undangan.');g.arrived+=count;d.logs.push({id:crypto.randomUUID(),guest:id,count,at:new Date().toISOString()});});}
 function showGuest(g){if(!g||!g.active){modal('Undangan belum dapat diterima',`<p class="error">${g?'QR undangan sudah dinonaktifkan.':'QR tidak ditemukan untuk acara ini.'}</p><p>Cari nama tamu atau minta bantuan pengelola.</p>`);return;}const remaining=g.quota-g.arrived;modal(remaining===0?'Sudah check-in':'Undangan terverifikasi',`<div class="success">${remaining?'✓':'↺'}</div><h2>${esc(g.name)}</h2><p>${g.arrived} dari ${g.quota} orang sudah hadir.</p><p class="hint">Offline: kehadiran perangkat lain mungkin belum tersedia.</p>${remaining?`<form id="check-form"><label>Jumlah yang datang sekarang<select id="count" required>${Array.from({length:remaining},(_,i)=>`<option value="${remaining-i}">${remaining-i}</option>`).join('')}</select></label><button class="primary">${g.arrived?'Tambah kedatangan':'Catat kehadiran'}</button></form>`:'<p>Kehadiran tidak ditambahkan kembali.</p>'}`);if(remaining)$('#check-form').onsubmit=async e=>{e.preventDefault();try{await checkIn(g.id,Number($('#count').value));modal('Kehadiran tersimpan',`<div class="success">✓</div><h2>${esc(g.name)}</h2><p>Selamat menikmati hari istimewa ini.</p><button id="next" class="primary">Pindai tamu berikutnya</button>`);$('#next').onclick=()=>{$('#modal').close();};}catch(e){toast(e.message);}};}
 function resolveCode(raw){let code=raw.trim();try{const p=JSON.parse(code);if(p.event!==db.event.id)return showGuest(null);code=p.code;}catch{}showGuest(db.guests.find(g=>g.code===code));}
