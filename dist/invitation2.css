@@ -44,3 +44,10 @@
 @media(max-width:760px){.gallery-page{grid-template-columns:repeat(3,min(82vw,360px));flex:0 0 auto;gap:18px;padding-inline:9px}.gallery-page .gallery-item{padding:9px 9px 16px}.gallery-page .gallery-item span{font-size:.95rem;margin-top:12px}.wish-card p,.wish-list.has-pages .wish-card p{font-size:1rem}.wish-list.has-pages>.wish-card,.wish-loop-copy>.wish-card{padding:24px 20px}.wish-card strong{font-size:1.3rem}}
 
 .wish-list.has-pages,.wish-loop-copy{align-items:flex-start}
+
+/* GSAP owns text arrival, CSS retains the hand-drawn illustration animation. */
+.motion-ready .gsap-ready .cover-paper.in-view>*{animation:none}
+.gallery-item{transition:box-shadow .25s ease,border-color .25s ease}
+.gallery-item:focus-visible{outline-offset:-5px}
+@media(hover:hover){.gallery-item:hover{box-shadow:0 14px 32px #604d2720;border-color:var(--gold)}}
+@media(prefers-reduced-motion:reduce){.gsap-ready [style]{opacity:1!important}}

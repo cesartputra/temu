@@ -8,6 +8,7 @@ from http.cookies import SimpleCookie
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from guest_access import GuestAccess, Denied
+from invitation_media import MEDIA_NAMES
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_BODY = 20 * 1024 * 1024
@@ -380,7 +381,7 @@ def make_handler(database,token,allowed_hosts):
             if not isinstance(body,dict):raise ValueError('Permintaan tidak valid.')
             return body
         def serve_invitation_media(self,name):
-            if name not in ('portrait-1.jpg','portrait-2.jpg','portrait-3.jpg','portrait-cesar.jpg','portrait-revalina.jpg','film.mp4','song.mp3'):return self.reply(404,{'error':'Media tidak ditemukan.'})
+            if name not in MEDIA_NAMES:return self.reply(404,{'error':'Media tidak ditemukan.'})
             if not database.public_event():return self.reply(404,{'error':'Undangan belum tersedia.'})
             path=Path(os.environ.get('TEMU_PRIVATE_MEDIA_DIR',str(ROOT/'private-media')))/name
             if not path.is_file():return self.reply(404,{'error':'Media belum tersedia.'})
@@ -425,14 +426,14 @@ def make_handler(database,token,allowed_hosts):
             if not database.delete_event(path[len('/api/events/'):]):return self.reply(404,{'error':'Acara tidak ditemukan.'})
             directory=os.environ.get('TEMU_PRIVATE_MEDIA_DIR')
             if directory and not database.events():
-                for name in ('portrait-1.jpg','portrait-2.jpg','portrait-3.jpg','portrait-cesar.jpg','portrait-revalina.jpg','film.mp4','song.mp3'):(Path(directory)/name).unlink(missing_ok=True)
+                for name in MEDIA_NAMES:(Path(directory)/name).unlink(missing_ok=True)
             return self.reply(200,{'ok':True})
         def do_PUT(self):
             path=urlsplit(self.path).path
             if not path.startswith('/api/admin/media/'):return self.reply(404,{'error':'Tidak ditemukan.'})
             if not self.authorized() or self.headers.get('X-Temu-Media')!='1':return self.reply(401,{'error':'Akses pengelola diperlukan.'})
             name=path.rsplit('/',1)[-1]
-            if name not in ('portrait-1.jpg','portrait-2.jpg','portrait-3.jpg','portrait-cesar.jpg','portrait-revalina.jpg','film.mp4','song.mp3'):return self.reply(404,{'error':'Media tidak ditemukan.'})
+            if name not in MEDIA_NAMES:return self.reply(404,{'error':'Media tidak ditemukan.'})
             try:size=int(self.headers.get('Content-Length','0'))
             except ValueError:return self.reply(400,{'error':'Ukuran media tidak valid.'})
             if not 12<=size<=30*1024*1024:return self.reply(413,{'error':'Media harus berukuran paling banyak 30 MB.'})

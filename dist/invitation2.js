@@ -107,6 +107,7 @@ async function loadInvitation(){accessAllowed=false;try{const params=new URLSear
 $('#retry').addEventListener('click',loadInvitation);loadInvitation();
 
 function setupPageMotion(){
+  window.TemuInvitationMotion?.setup({root:$('#invitation'),preference:reducedMotion});
   if(!('IntersectionObserver' in window))return;
   const sections=document.querySelectorAll('.cover-paper,.section,.portrait-band,footer');
   const sketches=document.querySelectorAll('#invitation .sketch');

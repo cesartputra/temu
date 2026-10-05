@@ -1,4 +1,7 @@
 import http.cookiejar, concurrent.futures, hashlib
+import os
+from pathlib import Path
+from unittest import mock
 import json, tempfile, threading, unittest, urllib.request, urllib.error
 from server_test import server, seed, bootstrap, change
 
@@ -121,5 +124,21 @@ class PersonalInvitationTests(unittest.TestCase):
   with self.db.connect() as c:c.execute('UPDATE events SET state=?',(json.dumps(state),))
   with self.assertRaises(urllib.error.HTTPError) as error:urllib.request.urlopen(self.origin+info['guest']['calendarPath'])
   self.assertEqual(error.exception.code,403);error.exception.close()
+
+
+
+ def test_gallery_upload_is_private_and_rejects_unlisted_names(self):
+  image=b'\xff\xd8\xff'+b'photo-test'+b'\xff\xd9'
+  directory=Path(self.tmp.name)/'media'
+  with mock.patch.dict(os.environ,{'TEMU_PRIVATE_MEDIA_DIR':str(directory)}):
+   request=urllib.request.Request(self.origin+'/api/admin/media/gallery-SPW07375.jpg',data=image,method='PUT',headers={'Authorization':'Bearer '+self.token,'X-Temu-Media':'1'})
+   with urllib.request.urlopen(request) as response:self.assertTrue(json.load(response)['ok'])
+   with self.assertRaises(urllib.error.HTTPError) as denied:urllib.request.urlopen(self.origin+'/api/invite/public-media/gallery-SPW07375.jpg')
+   self.assertEqual(denied.exception.code,403);denied.exception.close()
+   self.post('/api/invite/guest',self.db.guest_link('wedding','g'))
+   with self.opener.open(self.origin+'/api/invite/public-media/gallery-SPW07375.jpg') as response:self.assertEqual(response.read(),image)
+   request=urllib.request.Request(self.origin+'/api/admin/media/unknown.jpg',data=image,method='PUT',headers={'Authorization':'Bearer '+self.token,'X-Temu-Media':'1'})
+   with self.assertRaises(urllib.error.HTTPError) as denied:urllib.request.urlopen(request)
+   self.assertEqual(denied.exception.code,404);denied.exception.close()
 
 if __name__=='__main__':unittest.main()

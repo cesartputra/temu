@@ -204,3 +204,7 @@ Tamu memiliki status **VIP Y/N**, default N pada data lama atau CSV tanpa kolom 
 VIP dan Akad dapat diubah melalui toggle pada kolom daftar tamu (memerlukan akses pengelola). Kolom WhatsApp membedakan belum dibuka, sudah buka WhatsApp, dan sudah kirim yang ditandai pengelola. Tautan WhatsApp hanya mengisi teks; gunakan **Salin teks + gambar QR** lalu tempel. Jika WhatsApp memilih gambar saja, salin teks terpisah untuk caption; unduh PNG tetap tersedia jika browser menolak clipboard gambar. Tidak ada pengiriman otomatis atau konfirmasi terkirim dari WhatsApp.
 
 Filter kelompok pada Daftar tamu dapat digabungkan dengan pencarian dan filter kehadiran; tersedia pilihan semua kelompok dan tanpa kelompok. Pilihan kelompok tetap tersimpan saat data diperbarui, kecuali kelompok itu sudah tidak ada.
+
+Galeri undangan menggunakan 15 foto unik (tiga foto lama dan 12 tambahan), tetap disimpan di `private-media/` yang diabaikan Git. Inventaris media di `server/invitation_media.py` juga dipakai oleh pengunggah media. Foto tambahan dioptimalkan menjadi JPEG progresif maksimal 1000 × 1400 piksel dan dimuat secara lazy. Galeri versi 2 tetap bergerak tanpa akhir dalam kelompok tiga foto.
+
+Versi 2 menyertakan GSAP 3.13.0 secara lokal untuk fade-in nama pengantin dan transisi judul, profil, serta kartu jadwal. Animasi diputar ulang saat bagian masuk kembali ke layar, berhenti ketika tab disembunyikan, dan mengikuti preferensi reduced motion perangkat. Ilustrasi pita/bunga tetap memakai animasi garis CSS. Library dan pemberitahuan lisensinya ada di `dist/vendor/`.
