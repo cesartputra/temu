@@ -72,3 +72,24 @@ test('Ringkasan akad dan VIP menghitung kuota undangan aktif, bukan check-in',as
  assert.match(markup,/Total orang undangan VIP<\/span><strong>7<small>orang/);
  assert.match(markup,/Orang hadir<\/span><strong>1<small>orang/);
 });
+
+
+test('Check-in VIP menampilkan arahan WO, mempertahankan kamera, dan menandai kedatangan terbaru',async()=>{
+ const c=await context();await vm.runInContext("commit(d=>d.guests.push({id:'vip-arrival',code:'qr-vip',name:'Bayu <VIP>',group:'OJK & Mitra',quota:2,arrived:0,active:true,vip:'y'}))",c);
+ vm.runInContext("let vipCameraStops=0;stream={active:true,getTracks:()=>[{stop(){vipCameraStops++}}]};showGuest(db.guests[0]);document.querySelector('#count').value='1'",c);
+ assert.match(vm.runInContext("document.querySelector('#modal-body').innerHTML",c),/Prioritas penyambutan VIP/);
+ await vm.runInContext("document.querySelector('#check-form').onsubmit({preventDefault(){}})",c);
+ const html=vm.runInContext("document.querySelector('#modal-body').innerHTML",c);
+ assert.match(html,/role="alert"/);assert.match(html,/VIP sudah tiba — hubungi WO/);assert.match(html,/1 dari 2 orang/);assert.match(html,/Bayu &lt;VIP&gt;/);assert.match(html,/OJK &amp; Mitra/);
+ assert.equal(vm.runInContext('vipCameraStops',c),0);assert.equal(vm.runInContext('db.guests[0].code',c),'qr-vip');
+ assert.match(vm.runInContext("document.querySelector('#recent').innerHTML",c),/recent-row-vip/);
+ vm.runInContext("document.querySelector('#next').onclick()",c);assert.equal(vm.runInContext('vipCameraStops',c),0);
+});
+test('Check-in reguler tidak memunculkan peringatan VIP atau arahan WO',async()=>{
+ const c=await context();await vm.runInContext("commit(d=>d.guests.push({id:'regular-arrival',code:'qr-regular',name:'Tamu Reguler',group:'Teman',quota:1,arrived:0,active:true}))",c);
+ vm.runInContext("showGuest(db.guests[0]);document.querySelector('#count').value='1'",c);
+ await vm.runInContext("document.querySelector('#check-form').onsubmit({preventDefault(){}})",c);
+ assert.equal(vm.runInContext("document.querySelector('#modal-title').textContent",c),'Kehadiran tersimpan');
+ assert.doesNotMatch(vm.runInContext("document.querySelector('#modal-body').innerHTML",c),/vip-arrival-notice|hubungi WO/);
+ assert.doesNotMatch(vm.runInContext("document.querySelector('#recent').innerHTML",c),/recent-row-vip|Hubungi WO/);
+});

@@ -73,3 +73,12 @@ button.danger{border-color:#8d3e38;color:#8d3e38}button.danger:hover{background:
 .stats .stat:nth-child(4n){border-right:0}
 .stats .stat:nth-last-child(-n+4){border-bottom:0}
 @media(max-width:900px){.stats .stat:nth-child(2n){border-right:0}.stats .stat:nth-child(n){border-bottom:1px solid var(--line)}.stats .stat:nth-last-child(-n+2){border-bottom:0}}
+
+/* VIP arrivals must remain easy for an usher to notice. */
+.vip-arrival-notice{position:static;inset:auto;width:auto;display:block;margin:18px 0;padding:20px;border:1px solid #c9ae77;border-left:5px solid #a27d38;border-radius:12px;background:#fbf3e1;color:#59421c}
+.vip-arrival-notice h3{margin:12px 0 8px;font-size:1.25rem;line-height:1.35}
+.vip-arrival-notice p{margin:0 0 10px;color:#59421c;line-height:1.55}
+.vip-arrival-notice small{color:#735c35}
+.recent-row-vip{background:#fbf3e1;border:1px solid #e5d3af;border-left:4px solid #a27d38;border-radius:9px;padding:14px;margin:8px 0}
+.recent-row-vip .vip-badge{margin-left:8px}
+.recent-row .vip-followup{margin:8px 0 0;font-size:.85rem;color:#745620;font-weight:600}
