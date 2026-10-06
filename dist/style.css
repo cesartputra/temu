@@ -67,3 +67,9 @@ button.danger{border-color:#8d3e38;color:#8d3e38}button.danger:hover{background:
 .vip-badge{display:inline-block;padding:5px 10px;border:1px solid #c9ae77;border-radius:999px;background:#f8efd9;color:#745620;font-size:.8rem;font-weight:700;letter-spacing:.04em}
 
 .guest-toggle{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;min-height:40px;border:1px solid var(--line);background:#fff;border-radius:10px;white-space:nowrap}.toggle-track{position:relative;width:32px;height:19px;background:#ccd5d0;border-radius:20px}.toggle-track:after{content:'';position:absolute;top:3px;left:3px;width:13px;height:13px;background:white;border-radius:50%;transition:transform .15s}.guest-toggle.is-on .toggle-track{background:#315748}.guest-toggle.is-on .toggle-track:after{transform:translateX(13px)}.guest-toggle:focus-visible{outline:3px solid #bda66f;outline-offset:3px}.whatsapp-status{display:inline-block;min-width:90px;font-size:.78rem;color:#6b776f}.whatsapp-status.opened{color:#9a6b28}.whatsapp-status.sent{color:#315748;font-weight:700}
+
+/* Two rows of invitation totals; each card keeps its unit readable on phones. */
+.stats .stat{border-bottom:1px solid var(--line)}
+.stats .stat:nth-child(4n){border-right:0}
+.stats .stat:nth-last-child(-n+4){border-bottom:0}
+@media(max-width:900px){.stats .stat:nth-child(2n){border-right:0}.stats .stat:nth-child(n){border-bottom:1px solid var(--line)}.stats .stat:nth-last-child(-n+2){border-bottom:0}}
