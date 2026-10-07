@@ -20,13 +20,13 @@ def main():
     if thumbnail.exists():out.add(thumbnail,arcname=thumbnail.name)
   size=archive.stat().st_size
   if size>256*1024*1024:raise SystemExit('Migration bundle exceeds 256 MB; use a streamed maintenance migration.')
-  host,port=internal_target(os.environ['TEMU_ALBUM_UPSTREAM_URL']);http=http.client.HTTPConnection(host,port,timeout=90)
+  host,port=internal_target(os.environ['TEMU_ALBUM_UPSTREAM_URL']);connection=http.client.HTTPConnection(host,port,timeout=90)
   try:
-   http.putrequest('POST','/api/album/admin/migration');http.putheader('Authorization','Bearer '+os.environ['TEMU_SERVER_TOKEN']);http.putheader('X-Temu-Album-Proxy',os.environ['TEMU_ALBUM_PROXY_KEY']);http.putheader('X-Temu-Album','1');http.putheader('Content-Type','application/x-tar');http.putheader('Content-Length',str(size));http.endheaders()
+   connection.putrequest('POST','/api/album/admin/migration');connection.putheader('Authorization','Bearer '+os.environ['TEMU_SERVER_TOKEN']);connection.putheader('X-Temu-Album-Proxy',os.environ['TEMU_ALBUM_PROXY_KEY']);connection.putheader('X-Temu-Album','1');connection.putheader('Content-Type','application/x-tar');connection.putheader('Content-Length',str(size));connection.endheaders()
    with archive.open('rb') as f:
-    while chunk:=f.read(65536):http.send(chunk)
-   response=http.getresponse();data=json.loads(response.read(8192))
+    while chunk:=f.read(65536):connection.send(chunk)
+   response=connection.getresponse();data=json.loads(response.read(8192))
    if response.status!=200:raise SystemExit('Migration failed: '+data.get('error','server unavailable'))
    print('Album migrated:',data['imported'],'items. Original QR, metadata and source files preserved.')
-  finally:http.close()
+  finally:connection.close()
 if __name__=='__main__':main()

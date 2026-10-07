@@ -1,4 +1,4 @@
-import io,json,hashlib,os,tarfile,tempfile,threading,unittest
+import io,json,hashlib,os,tarfile,tempfile,threading,unittest,subprocess,sys
 from pathlib import Path
 from unittest import mock
 import album_test
@@ -65,4 +65,17 @@ class SplitAlbumTests(unittest.TestCase):
   finally:self.origin=source
   self.assertEqual(album.Album(self.albumdb).config()['key'],config['key']);self.assertEqual(self.request('/api/album/admin/file/'+identifier,admin=True)[2],photo)
   self.assertEqual(json.loads(self.request('/api/album/admin/items',admin=True)[2])['items'][0]['created'],item['created'])
+ def test_migration_command_copies_originals_without_removing_source(self):
+  source=album.Album(self.db);config=source.configure({'title':'Existing album','mode':'live','filter':'film','uploadsOpen':True})
+  identifier='b'*32;photo=b'\xff\xd8\xff'+b'original-camera-bytes'*10+b'\xff\xd9';created='2026-10-07T01:00:00+00:00'
+  with self.db.connect() as c:c.execute('INSERT INTO album_items VALUES(?,?,?,?,?,?,?,0)',(identifier,'Tamu','Kenangan','film','image/jpeg',len(photo),created))
+  (source.directory/(identifier+'.jpg')).write_bytes(photo)
+  environment={**os.environ,'TEMU_SERVER_TOKEN':self.token,'TEMU_ALBUM_PROXY_KEY':self.proxy,'TEMU_ALBUM_UPSTREAM_URL':'http://127.0.0.1:'+str(self.albumhttp.server_port)}
+  command=[sys.executable,str(Path(server.__file__).with_name('migrate_album.py')),'--data-dir',str(self.db.directory)]
+  result=subprocess.run(command,env=environment,capture_output=True,text=True,timeout=15)
+  self.assertEqual(result.returncode,0,result.stderr);self.assertIn('Album migrated: 1 items',result.stdout)
+  self.assertEqual(album.Album(self.albumdb).config()['key'],config['key'])
+  self.assertEqual(self.request('/api/album/admin/file/'+identifier,admin=True)[2],photo)
+  self.assertEqual((source.directory/(identifier+'.jpg')).read_bytes(),photo)
+  self.assertEqual(source.config()['key'],config['key'])
 if __name__=='__main__':unittest.main()
