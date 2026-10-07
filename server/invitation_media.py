@@ -16,4 +16,4 @@ GALLERY = (
     ('gallery-SPW07337.jpg', 'SPW07337'),
     ('gallery-SPW07268.jpg', 'SPW07268'),
 )
-MEDIA_NAMES = tuple(name for name, _ in GALLERY) + ('portrait-cesar.jpg', 'portrait-revalina.jpg', 'film.mp4', 'song.mp3')
+MEDIA_NAMES = tuple(name for name, _ in GALLERY) + ('portrait-cesar.jpg', 'portrait-revalina.jpg', 'film.mp4', 'song.mp3', 'album-overlay-v1.png')

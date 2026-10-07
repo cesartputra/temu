@@ -7,9 +7,10 @@
   <meta name="robots" content="noindex,nofollow">
   <title>Our shared moments · Reva & Cesar</title>
   <link rel="icon" href="icon.svg">
-  <link rel="stylesheet" href="album.css?v=20261007-4">
-  <script defer src="album-camera.js?v=20261007-4"></script>
-  <script defer src="album.js?v=20261007-4"></script>
+  <link rel="stylesheet" href="album.css?v=20261007-5">
+  <script defer src="album-camera.js?v=20261007-5"></script>
+  <script defer src="album-photo.js?v=20261007-5"></script>
+  <script defer src="album.js?v=20261007-5"></script>
 </head>
 <body>
   <header class="site-header">
@@ -52,6 +53,7 @@
             <div id="viewfinder" class="viewfinder">
               <div id="placeholder"><span class="camera-drawing" aria-hidden="true"><span></span></span><h3>Momen yang kecil,<br>kenangan yang besar.</h3><p>Mulai dengan kamera HP kamu.</p></div>
               <img id="photo-preview" alt="Pratinjau foto hasil kameramu" hidden>
+              <img id="photo-overlay" class="photo-overlay" alt="" aria-hidden="true" hidden>
               <video id="video-preview" controls playsinline preload="metadata" hidden></video>
               <span class="viewfinder-corner" aria-hidden="true"></span>
               <span id="preview-label" class="preview-label" hidden>PRATINJAU · FILM</span>
@@ -59,7 +61,7 @@
             <input id="native-photo" type="file" accept="image/*" capture="environment" hidden aria-label="Ambil foto dengan kamera HP">
             <input id="native-video" type="file" accept="video/*" capture="environment" hidden aria-label="Rekam video dengan kamera HP">
             <div class="camera-actions"><button id="take-photo" class="solid"><span aria-hidden="true">◎</span> Ambil foto</button><button id="take-video" class="outline"><span aria-hidden="true">▷</span> Rekam video</button></div>
-            <p class="camera-hint">Kamera HP terbuka, lalu kembali ke sini untuk membagikan hasilnya.</p>
+            <p class="camera-hint">Kamera HP terbuka, lalu kembali ke sini untuk membagikan hasilnya. Foto otomatis dihiasi Reva & Cesar beserta enam kucing kami.</p>
             <button id="discard" type="button" class="file-button" hidden>Hapus pratinjau & ambil ulang</button>
           </div>
           <form id="upload-form" class="upload-card">
@@ -72,7 +74,7 @@
               <button type="button" data-filter="warm" aria-pressed="false"><span class="swatch warm"><span>R&C</span></span>Hangat</button>
               <button type="button" data-filter="mono" aria-pressed="false"><span class="swatch mono"><span>R&C</span></span>Monokrom</button>
             </div></fieldset>
-            <p class="small filter-note">Nuansa untuk tampilan album. File asli tetap utuh.</p>
+            <p class="small filter-note">Foto disimpan dengan nuansa dan hiasan Reva & Cesar. Nuansa video berlaku pada tampilan album.</p>
             <label for="caption">Cerita kecilnya <span>opsional</span></label>
             <textarea id="caption" rows="3" maxlength="300" placeholder="Momen ini bikin aku tersenyum karena…"></textarea>
             <div class="file-info" id="file-info">◎ Belum ada momen diambil.</div>

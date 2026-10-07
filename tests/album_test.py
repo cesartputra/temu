@@ -1,4 +1,4 @@
-import hashlib,importlib.util,json,tempfile,threading,unittest,urllib.request,urllib.error
+import os,hashlib,importlib.util,json,tempfile,threading,unittest,urllib.request,urllib.error
 from pathlib import Path
 from unittest import mock
 spec=importlib.util.spec_from_file_location('album_server',Path(__file__).resolve().parents[1]/'server/server.py');server=importlib.util.module_from_spec(spec);spec.loader.exec_module(server)
@@ -29,6 +29,16 @@ class AlbumTests(unittest.TestCase):
  def upload(self):
   data=b'\xff\xd8\xff'+b'full-resolution-original'*100+b'\xff\xd9'
   status,_,raw=self.request('/api/album/upload','PUT',data,mime='image/jpeg',headers={'X-Album-Name':'Bayu','X-Album-Filter':'film'});self.assertEqual(status,201);return json.loads(raw)['id'],data
+ def test_decorative_overlay_public_without_invitation_cookie_but_upload_requires_admin(self):
+  image=b'\x89PNG\r\n\x1a\n'+b'\x00\x00\x00\x0dIHDR'+b'overlay-test'*10
+  with mock.patch.dict(os.environ,{'TEMU_PRIVATE_MEDIA_DIR':str(Path(self.tmp.name)/'private-media')}):
+   self.assertEqual(self.request('/api/admin/media/album-overlay-v1.png','PUT',image,headers={'X-Temu-Media':'1'})[0],401)
+   self.assertEqual(self.request('/api/admin/media/album-overlay-v1.png','PUT',b'invalid png bytes',admin=True,headers={'X-Temu-Media':'1'})[0],400)
+   self.assertEqual(self.request('/api/admin/media/album-overlay-v1.png','PUT',image,admin=True,headers={'X-Temu-Media':'1'})[0],200)
+   status,headers,body=self.request('/album-overlay-v1.png');self.assertEqual(status,200);self.assertEqual(headers['Content-Type'],'image/png');self.assertEqual(body,image)
+   self.assertEqual(self.request('/api/invite/public-media/portrait-1.jpg')[0],403)
+   self.assertEqual(self.request('/api/invite/public-media/album-overlay-v1.png')[0],403)
+   self.assertEqual(self.request('/api/admin/media/unlisted.png','PUT',image,admin=True,headers={'X-Temu-Media':'1'})[0],404)
  def test_admin_required_and_qr_stable_after_config_change(self):
   self.assertEqual(self.request('/api/album/admin')[0],401);c=self.config();self.assertEqual(c['key'],self.config('after','2026-11-21T20:30:00+07:00')['key']);self.assertEqual(self.request('/api/album/admin',admin=True)[0],200)
  def test_gate_no_cookie_and_invalid_shared_key(self):

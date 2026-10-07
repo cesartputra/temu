@@ -391,7 +391,7 @@ def make_handler(database,token,allowed_hosts):
             return body
         def serve_invitation_media(self,name):
             if name not in MEDIA_NAMES:return self.reply(404,{'error':'Media tidak ditemukan.'})
-            if not database.public_event():return self.reply(404,{'error':'Undangan belum tersedia.'})
+            if name!='album-overlay-v1.png' and not database.public_event():return self.reply(404,{'error':'Undangan belum tersedia.'})
             path=Path(os.environ.get('TEMU_PRIVATE_MEDIA_DIR',str(ROOT/'private-media')))/name
             if not path.is_file():return self.reply(404,{'error':'Media belum tersedia.'})
             size=path.stat().st_size;start=0;end=size-1;status=200
@@ -403,7 +403,7 @@ def make_handler(database,token,allowed_hosts):
                 else:start=int(m[1]);end=min(size-1,int(m[2])) if m[2] else size-1
                 if start>end or start>=size:return self.reply(416,{'error':'Rentang tidak valid.'})
                 status=206
-            mime='video/mp4' if name.endswith('.mp4') else 'audio/mpeg' if name.endswith('.mp3') else 'image/jpeg'
+            mime='video/mp4' if name.endswith('.mp4') else 'audio/mpeg' if name.endswith('.mp3') else 'image/png' if name.endswith('.png') else 'image/jpeg'
             self.send_response(status);self.send_header('Content-Type',mime);self.send_header('Cache-Control','no-store');self.send_header('Cross-Origin-Resource-Policy','same-origin');self.send_header('Accept-Ranges','bytes');self.send_header('Content-Length',str(end-start+1))
             if status==206:self.send_header('Content-Range',f'bytes {start}-{end}/{size}')
             self.end_headers()
@@ -452,6 +452,7 @@ def make_handler(database,token,allowed_hosts):
                 self.connection.settimeout(60);data=self.rfile.read(size)
                 if len(data)!=size:return self.reply(400,{'error':'Unggahan tidak lengkap.'})
                 if name.endswith('.jpg'):valid=data.startswith(b'\xff\xd8\xff') and data.endswith(b'\xff\xd9')
+                elif name.endswith('.png'):valid=data.startswith(b'\x89PNG\r\n\x1a\n') and data[12:16]==b'IHDR'
                 elif name.endswith('.mp3'):valid=data.startswith(b'ID3') or (data[0]==0xff and data[1]&0xe0==0xe0)
                 else:valid=data[4:8]==b'ftyp'
                 if not valid:return self.reply(400,{'error':'Format media tidak sesuai.'})
@@ -467,6 +468,8 @@ def make_handler(database,token,allowed_hosts):
             if album.handle(self):return
             if not self.safe_host():return self.reply(403,{'error':'Host tidak diizinkan.'})
             path=urlsplit(self.path).path
+            # Only this decorative overlay is public; invitation photos stay gated.
+            if path=='/album-overlay-v1.png':return self.serve_invitation_media('album-overlay-v1.png')
             if path=='/api/invite/album':
                 try:database.require_invitation_device(self.device_token(),parse_qs(urlsplit(self.path).query).get('g',[None])[0])
                 except Denied as error:return self.reply(403,{'error':str(error)})
