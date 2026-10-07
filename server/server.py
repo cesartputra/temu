@@ -9,6 +9,7 @@ import sys
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from guest_access import GuestAccess, Denied
 from invitation_media import MEDIA_NAMES
+from album import Album
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_BODY = 20 * 1024 * 1024
@@ -342,6 +343,7 @@ class Database:
 
 def make_handler(database,token,allowed_hosts):
     guest_access=GuestAccess(database)
+    album=Album(database)
     class Handler(SimpleHTTPRequestHandler):
         def __init__(self,*args,**kwargs):super().__init__(*args,directory=str(ROOT/'dist'),**kwargs)
         def log_message(self,fmt,*args):pass # Avoid logging credentials, QR values or guest data.
@@ -429,6 +431,7 @@ def make_handler(database,token,allowed_hosts):
                 for name in MEDIA_NAMES:(Path(directory)/name).unlink(missing_ok=True)
             return self.reply(200,{'ok':True})
         def do_PUT(self):
+            if album.handle(self):return
             path=urlsplit(self.path).path
             if not path.startswith('/api/admin/media/'):return self.reply(404,{'error':'Tidak ditemukan.'})
             if not self.authorized() or self.headers.get('X-Temu-Media')!='1':return self.reply(401,{'error':'Akses pengelola diperlukan.'})
@@ -453,8 +456,14 @@ def make_handler(database,token,allowed_hosts):
                 return self.reply(200,{'ok':True,'name':name,'bytes':size})
             except (OSError,TimeoutError):return self.reply(503,{'error':'Media tidak dapat disimpan.'})
         def do_GET(self):
+            if album.handle(self):return
             if not self.safe_host():return self.reply(403,{'error':'Host tidak diizinkan.'})
             path=urlsplit(self.path).path
+            if path=='/api/invite/album':
+                try:database.require_invitation_device(self.device_token(),parse_qs(urlsplit(self.path).query).get('g',[None])[0])
+                except Denied as error:return self.reply(403,{'error':str(error)})
+                config=album.config()
+                return self.reply(200,{'url':'/album#k='+config['key'] if config else None})
             if path=='/api/invite/calendar.ics':
                 query=parse_qs(urlsplit(self.path).query)
                 try:content=database.guest_calendar(query.get('g',[''])[0],query.get('c',[''])[0]).encode()
@@ -494,8 +503,11 @@ def make_handler(database,token,allowed_hosts):
                 data=(ROOT/page).read_bytes();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.send_header('X-Robots-Tag','noindex, nofollow, noarchive');self.send_header('Content-Security-Policy',"default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");self.send_header('Content-Length',str(len(data)));self.end_headers()
                 if self.command!='HEAD':self.wfile.write(data)
                 return
+            if path in ('/album','/album/'):
+                self.path='/album.html'
             return super().do_HEAD() if self.command=='HEAD' else super().do_GET()
         def do_POST(self):
+            if album.handle(self):return
             match=re.fullmatch(r'/api/events/([A-Za-z0-9_-]{1,200})/attendance/reset',urlsplit(self.path).path)
             if match:
                 if not self.authorized() or self.headers.get('X-Temu-Reset')!='1':return self.reply(401,{'error':'Akses pengelola diperlukan.'})

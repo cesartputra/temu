@@ -82,3 +82,5 @@ button.danger{border-color:#8d3e38;color:#8d3e38}button.danger:hover{background:
 .recent-row-vip{background:#fbf3e1;border:1px solid #e5d3af;border-left:4px solid #a27d38;border-radius:9px;padding:14px;margin:8px 0}
 .recent-row-vip .vip-badge{margin-left:8px}
 .recent-row .vip-followup{margin:8px 0 0;font-size:.85rem;color:#745620;font-weight:600}
+
+.album-admin-qr{border-top:1px solid var(--line);margin-top:24px;padding-top:24px}.album-admin-qr svg{max-width:260px}.album-admin-qr .actions{justify-content:center}.album-open-link{display:inline-flex;align-items:center;min-height:48px;padding:12px 18px;color:var(--green);border:1px solid var(--line);border-radius:9px;text-decoration:none;font-weight:600}@media print{.album-qr-print{color:#96333e;text-align:center;border:2px solid #d9cab6;background:#fbf7ef;padding:12mm;margin:auto;width:180mm}.album-qr-print>span{font:10pt Arial;letter-spacing:2px}.album-qr-print h1{font:32pt Georgia;margin:6mm}.album-qr-print h2{font:18pt Georgia}.album-qr-print svg{width:68mm;height:68mm}.album-qr-print p{color:#655447}.album-qr-print strong{font:16pt Georgia}.album-qr-print small{font:italic 10pt Georgia}}

@@ -1,0 +1,2 @@
+'use strict';
+(async()=>{try{const guest=new URLSearchParams(location.search).get('g');const response=await fetch('/api/invite/album'+(guest?'?g='+encodeURIComponent(guest):''),{cache:'no-store'});if(!response.ok)return;const data=await response.json();if(!data.url?.startsWith('/album#k='))return;document.querySelector('#shared-album-link').href=data.url;document.querySelector('#shared-album-invite').hidden=false;}catch{}})();

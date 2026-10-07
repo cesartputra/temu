@@ -208,3 +208,13 @@ Filter kelompok pada Daftar tamu dapat digabungkan dengan pencarian dan filter k
 Galeri undangan menggunakan 15 foto unik (tiga foto lama dan 12 tambahan), tetap disimpan di `private-media/` yang diabaikan Git. Inventaris media di `server/invitation_media.py` juga dipakai oleh pengunggah media. Foto tambahan dioptimalkan menjadi JPEG progresif maksimal 1000 × 1400 piksel dan dimuat secara lazy. Galeri versi 2 tetap bergerak tanpa akhir dalam kelompok tiga foto.
 
 Versi 2 menyertakan GSAP 3.13.0 secara lokal untuk fade-in nama pengantin dan transisi judul, profil, serta kartu jadwal. Animasi diputar ulang saat bagian masuk kembali ke layar, berhenti ketika tab disembunyikan, dan mengikuti preferensi reduced motion perangkat. Ilustrasi pita/bunga tetap memakai animasi garis CSS. Library dan pemberitahuan lisensinya ada di `dist/vendor/`.
+
+### Album foto & video tamu (`/album`)
+
+Pengelola membuka **Pengaturan → Atur album & QR** setelah menghubungkan server. Aktifkan album, pilih nuansa awal, buka/tutup unggahan, dan pilih galeri langsung atau tanggal/jam pembukaan. QR album tetap sama setelah pengaturan diperbarui. Cetak QR meja atau salin tautannya; undangan digital juga menampilkan tautan album ketika aktif.
+
+Tamu tidak perlu akun atau aplikasi. Gunakan QR/tautan album untuk mengambil foto/video dengan kamera HP atau memilih file. Galeri hanya terbuka sesuai waktu server. Filter Asli, Film, Hangat, dan Monokrom diterapkan pada tampilan; foto berfilter dapat diekspor oleh browser yang mendukung Canvas filter. Filter video hanya untuk pemutar, sedangkan unduhan video selalu file asli. Unduhan file asli tidak dikompresi ulang. MOV dapat diunduh meskipun codec tertentu tidak didukung pemutar perangkat.
+
+Batas: 100 MB per file (JPG/PNG/WebP/MP4/MOV/WebM), 2 GB album. Unggahan disimpan secara streaming. Galeri memakai pratinjau JPEG kecil bila browser berhasil membuatnya; file asli tetap disimpan. Kamera native/browser memerlukan HTTPS pada HP. HEIC perlu diubah ke JPG sebelum unggah.
+
+Data album berada di database dan **`<data-dir>/album-media/`** pada volume persisten (Helipod: `/data/album-media`). Cadangan SQLite tidak menyertakan file; salin folder ini bersama database untuk backup/migrasi. Media dan tautan album tidak boleh di-commit ke GitHub. QR album memberi akses kepada siapa pun yang menerimanya; QR ini terpisah dari QR check-in dan pembatasan satu perangkat undangan pribadi.

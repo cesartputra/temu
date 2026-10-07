@@ -1,0 +1,188 @@
+"""Shared guest album: original files, bounded streaming uploads, timed reveal."""
+import hmac, json, os, re, secrets, tempfile, threading
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import urlsplit, parse_qs
+from http.cookies import SimpleCookie
+
+FILTERS={'original','film','warm','mono'}
+MAX_FILE=100*1024*1024
+MAX_ALBUM=2*1024*1024*1024
+
+class AlbumError(Exception):
+    def __init__(self,message,status=400):self.status=status;super().__init__(message)
+
+def stamp():return datetime.now(timezone.utc).isoformat()
+def valid_media(mime,head):
+    return (mime=='image/jpeg' and head.startswith(b'\xff\xd8\xff') or
+            mime=='image/png' and head.startswith(b'\x89PNG\r\n\x1a\n') or
+            mime=='image/webp' and head.startswith(b'RIFF') and head[8:12]==b'WEBP' or
+            mime in ('video/mp4','video/quicktime') and head[4:8]==b'ftyp' or
+            mime=='video/webm' and head.startswith(b'\x1aE\xdf\xa3'))
+
+class Album:
+    def __init__(self,db):
+        self.db=db;self.upload_lock=threading.Lock();self.directory=db.directory/'album-media';self.directory.mkdir(mode=0o700,exist_ok=True)
+        with db.connect() as c:
+            c.executescript('''CREATE TABLE IF NOT EXISTS album_settings(id INTEGER PRIMARY KEY CHECK(id=1),config TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS album_items(id TEXT PRIMARY KEY,name TEXT NOT NULL,caption TEXT NOT NULL,filter TEXT NOT NULL,mime TEXT NOT NULL,size INTEGER NOT NULL,created TEXT NOT NULL,hidden INTEGER NOT NULL DEFAULT 0);''')
+            c.execute('INSERT OR IGNORE INTO app_secrets(name,value) VALUES(?,?)',('album-thumbnails',secrets.token_urlsafe(48)))
+            self.thumbnail_secret=c.execute('SELECT value FROM app_secrets WHERE name=?',('album-thumbnails',)).fetchone()[0]
+    def config(self):
+        with self.db.connect() as c:row=c.execute('SELECT config FROM album_settings WHERE id=1').fetchone()
+        return json.loads(row[0]) if row else None
+    def configure(self,body):
+        old=self.config();title=body.get('title','Reva & Cesar');mode=body.get('mode','after');release=body.get('releaseAt','');preset=body.get('filter','film')
+        if not isinstance(title,str) or not 1<=len(title.strip())<=120 or mode not in ('live','after') or preset not in FILTERS:raise AlbumError('Pengaturan album tidak valid.')
+        if mode=='after':
+            try:
+                dt=datetime.fromisoformat(release.replace('Z','+00:00'))
+                if dt.tzinfo is None:raise ValueError()
+                release=dt.astimezone(timezone.utc).isoformat()
+            except (ValueError,AttributeError):raise AlbumError('Isi tanggal dan jam pembukaan galeri.')
+        else:release=''
+        if type(body.get('uploadsOpen',True)) is not bool:raise AlbumError('Pengaturan unggahan tidak valid.')
+        config={'title':title.strip(),'mode':mode,'releaseAt':release,'filter':preset,'uploadsOpen':body.get('uploadsOpen',True),'key':old['key'] if old else secrets.token_urlsafe(32)}
+        with self.db.connect() as c:c.execute('INSERT OR REPLACE INTO album_settings VALUES(1,?)',(json.dumps(config),))
+        self.db.backup(force=True);return config
+    def opened(self,config):return config['mode']=='live' or datetime.now(timezone.utc)>=datetime.fromisoformat(config['releaseAt'])
+    def public(self,config):
+        with self.db.connect() as c:count=c.execute('SELECT count(*) FROM album_items WHERE hidden=0').fetchone()[0]
+        return {**{k:v for k,v in config.items() if k!='key'},'revealed':self.opened(config),'count':count,'maxFileMB':MAX_FILE//1024//1024}
+    def session(self,handler):
+        config=self.config()
+        try:
+            jar=SimpleCookie();jar.load(handler.headers.get('Cookie',''));key=jar['temu_album'].value
+        except (KeyError,ValueError):key=''
+        if not config or not hmac.compare_digest(config['key'],key):raise AlbumError('Buka album melalui QR atau tautan dari pengantin.',403)
+        return config
+    def list_items(self,config,offset=0):
+        if not self.opened(config):raise AlbumError('Galeri belum dibuka. Momenmu tetap tersimpan dengan aman.',403)
+        with self.db.connect() as c:
+            rows=c.execute('SELECT id,name,caption,filter,mime,size,created FROM album_items WHERE hidden=0 ORDER BY created DESC,id DESC LIMIT 25 OFFSET ?',(offset,)).fetchall()
+        keys=('id','name','caption','filter','mime','size','created')
+        return {'items':[{**dict(zip(keys,row)),'thumbnail':(self.directory/(row[0]+'.thumb.jpg')).is_file()} for row in rows[:24]],'next':offset+24 if len(rows)>24 else None}
+    def upload(self,handler,config):
+        if not config['uploadsOpen']:raise AlbumError('Unggahan album sudah ditutup.',403)
+        try:size=int(handler.headers.get('Content-Length','0'))
+        except ValueError:raise AlbumError('Ukuran file tidak valid.')
+        if not 12<=size<=MAX_FILE:raise AlbumError('Batas setiap file adalah 100 MB.',413)
+        mime=handler.headers.get('Content-Type','').split(';')[0]
+        exts={'image/jpeg':'.jpg','image/png':'.png','image/webp':'.webp','video/mp4':'.mp4','video/quicktime':'.mov','video/webm':'.webm'}
+        if mime not in exts:raise AlbumError('Gunakan foto JPG, PNG, WebP atau video MP4, MOV, WebM.',415)
+        # Serialized streaming keeps memory bounded and prevents concurrent quota overshoot.
+        with self.upload_lock:
+            with self.db.connect() as c:used=c.execute('SELECT coalesce(sum(size),0) FROM album_items').fetchone()[0]
+            if used+size>MAX_ALBUM:raise AlbumError('Album sudah penuh. Hubungi pengantin.',413)
+            handler.connection.settimeout(90);head=handler.rfile.read(min(32,size))
+            if not valid_media(mime,head):raise AlbumError('Isi file tidak sesuai format foto atau video.',415)
+            item=secrets.token_hex(16);tmp=None;target=self.directory/(item+exts[mime])
+            try:
+                with tempfile.NamedTemporaryFile(dir=self.directory,prefix='.upload-',delete=False) as f:
+                    tmp=Path(f.name);os.chmod(tmp,0o600);f.write(head);remaining=size-len(head)
+                    while remaining:
+                        chunk=handler.rfile.read(min(65536,remaining))
+                        if not chunk:raise AlbumError('Unggahan terputus. Silakan ulangi.')
+                        f.write(chunk);remaining-=len(chunk)
+                    f.flush();os.fsync(f.fileno())
+                # Bound name/filter metadata; never use client filenames on disk.
+                from urllib.parse import unquote
+                name=unquote(handler.headers.get('X-Album-Name','Tamu'))[:80].strip() or 'Tamu'
+                caption=unquote(handler.headers.get('X-Album-Caption',''))[:300].strip()
+                preset=handler.headers.get('X-Album-Filter',config['filter'])
+                if preset not in FILTERS:raise AlbumError('Filter tidak valid.')
+                os.replace(tmp,target)
+                with self.db.connect() as c:c.execute('INSERT INTO album_items VALUES(?,?,?,?,?,?,?,0)',(item,name,caption,preset,mime,size,stamp()))
+            except Exception:
+                target.unlink(missing_ok=True);raise
+            finally:
+                if tmp:tmp.unlink(missing_ok=True)
+        return {'ok':True,'id':item,'thumbnailKey':self.thumbnail_key(item),'message':'Momen tersimpan. Terima kasih!'}
+    def thumbnail_key(self,item):
+        return hmac.new(self.thumbnail_secret.encode(),item.encode(),'sha256').hexdigest()
+    def save_thumbnail(self,h,item):
+        key=h.headers.get('X-Album-Thumbnail-Key','')
+        if not hmac.compare_digest(key,self.thumbnail_key(item)):raise AlbumError('Akses pratinjau tidak sesuai.',403)
+        with self.db.connect() as c:row=c.execute('SELECT mime FROM album_items WHERE id=?',(item,)).fetchone()
+        if not row or not row[0].startswith('image/'):raise AlbumError('Foto tidak ditemukan.',404)
+        size=int(h.headers.get('Content-Length','0'))
+        if not 12<=size<=512*1024:raise AlbumError('Pratinjau terlalu besar.',413)
+        h.connection.settimeout(20);data=h.rfile.read(size)
+        if len(data)!=size or not data.startswith(b'\xff\xd8\xff') or not data.endswith(b'\xff\xd9'):raise AlbumError('Pratinjau tidak valid.',415)
+        with tempfile.NamedTemporaryFile(dir=self.directory,prefix='.thumb-',delete=False) as f:
+            temp=Path(f.name);f.write(data);f.flush();os.fsync(f.fileno())
+        try:os.replace(temp,self.directory/(item+'.thumb.jpg'))
+        finally:temp.unlink(missing_ok=True)
+        return {'ok':True}
+    def serve_file(self,h,item,config,admin=False):
+        if not admin and not self.opened(config):raise AlbumError('Galeri belum dibuka.',403)
+        with self.db.connect() as c:row=c.execute('SELECT mime,size FROM album_items WHERE id=? AND hidden=0',(item,)).fetchone()
+        if not row:raise AlbumError('Momen tidak ditemukan.',404)
+        mime,size=row;ext={'image/jpeg':'.jpg','image/png':'.png','image/webp':'.webp','video/mp4':'.mp4','video/quicktime':'.mov','video/webm':'.webm'}[mime]
+        file=self.directory/(item+ext)
+        if not file.is_file():raise AlbumError('File belum tersedia.',404)
+        if parse_qs(urlsplit(h.path).query).get('thumb')==['1']:
+            thumbnail=self.directory/(item+'.thumb.jpg')
+            if thumbnail.is_file():file=thumbnail;mime='image/jpeg';size=file.stat().st_size
+        start=0;end=size-1;status=200
+        value=h.headers.get('Range')
+        if value:
+            m=re.fullmatch(r'bytes=(\d*)-(\d*)',value)
+            if not m or not any(m.groups()):raise AlbumError('Rentang tidak valid.',416)
+            if not m[1]:start=max(0,size-int(m[2]))
+            else:start=int(m[1]);end=min(end,int(m[2])) if m[2] else end
+            if start>end or start>=size:raise AlbumError('Rentang tidak valid.',416)
+            status=206
+        h.send_response(status);h.send_header('Content-Type',mime);h.send_header('Cache-Control','private, no-store');h.send_header('Accept-Ranges','bytes');h.send_header('Content-Length',str(end-start+1));h.send_header('Cross-Origin-Resource-Policy','same-origin')
+        if status==206:h.send_header('Content-Range',f'bytes {start}-{end}/{size}')
+        if parse_qs(urlsplit(h.path).query).get('download')==['1']:h.send_header('Content-Disposition',f'attachment; filename="momen-{item[:8]}{ext}"')
+        h.end_headers()
+        if h.command=='HEAD':return
+        with file.open('rb') as f:
+            f.seek(start);remaining=end-start+1
+            while remaining:
+                chunk=f.read(min(65536,remaining))
+                if not chunk:break
+                h.wfile.write(chunk);remaining-=len(chunk)
+    def handle(self,h):
+        path=urlsplit(h.path).path
+        if not path.startswith('/api/album/'):return False
+        try:
+            if not h.safe_host():raise AlbumError('Host tidak diizinkan.',403)
+            if h.command in ('POST','PUT'):
+                origin=h.headers.get('Origin')
+                if h.headers.get('X-Temu-Album')!='1' or h.headers.get('Sec-Fetch-Site')=='cross-site' or (origin and urlsplit(origin).netloc!=h.headers.get('Host')):raise AlbumError('Permintaan tidak diizinkan.',403)
+            if path=='/api/album/admin':
+                if not h.authorized():raise AlbumError('Hubungkan server sebagai pengelola terlebih dahulu.',401)
+                if h.command in ('GET','HEAD'):h.reply(200,{'config':self.config()})
+                elif h.command=='POST':
+                    size=int(h.headers.get('Content-Length','0'))
+                    if not 0<size<=4096:raise AlbumError('Pengaturan tidak valid.')
+                    h.reply(200,{'config':self.configure(json.loads(h.rfile.read(size)))})
+                else:raise AlbumError('Metode tidak diizinkan.',405)
+            elif path=='/api/album/join' and h.command=='POST':
+                size=int(h.headers.get('Content-Length','0'))
+                if not 0<size<=1024:raise AlbumError('Tautan tidak valid.')
+                body=json.loads(h.rfile.read(size));config=self.config()
+                if not config or not isinstance(body.get('key'),str) or not hmac.compare_digest(config['key'],body['key']):raise AlbumError('QR album belum tersedia atau tautan tidak sesuai.',403)
+                local=h.headers.get('Host','').split(':')[0] in ('localhost','127.0.0.1')
+                cookie=f"temu_album={config['key']}; Path=/api/album; HttpOnly; SameSite=Lax; Max-Age=2592000"+('' if local else '; Secure')
+                h.reply(200,self.public(config),cookie)
+            else:
+                config=self.session(h)
+                if path=='/api/album/info' and h.command in ('GET','HEAD'):h.reply(200,self.public(config))
+                elif path=='/api/album/items' and h.command in ('GET','HEAD'):
+                    offset=int(parse_qs(urlsplit(h.path).query).get('offset',['0'])[0])
+                    if not 0<=offset<=100000:raise AlbumError('Halaman tidak valid.')
+                    h.reply(200,self.list_items(config,offset))
+                elif path=='/api/album/upload' and h.command=='PUT':h.reply(201,self.upload(h,config))
+                elif re.fullmatch(r'/api/album/thumbnail/[a-f0-9]{32}',path) and h.command=='PUT':h.reply(200,self.save_thumbnail(h,path.rsplit('/',1)[1]))
+                elif re.fullmatch(r'/api/album/file/[a-f0-9]{32}',path) and h.command in ('GET','HEAD'):self.serve_file(h,path.rsplit('/',1)[1],config)
+                else:raise AlbumError('Tidak ditemukan.',404)
+        except AlbumError as e:
+            # Avoid reusing a connection containing unread rejected upload bytes.
+            h.close_connection=True;h.reply(e.status,{'error':str(e)})
+        except (ValueError,TypeError,KeyError):h.close_connection=True;h.reply(400,{'error':'Permintaan album tidak valid.'})
+        except (BrokenPipeError,ConnectionResetError):pass
+        except (OSError,TimeoutError):h.close_connection=True;h.reply(503,{'error':'Album belum dapat diakses. Silakan coba lagi.'})
+        return True
