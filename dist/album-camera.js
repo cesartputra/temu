@@ -43,5 +43,12 @@ window.TemuAlbumCamera=(()=>{
   el('camera-switch').onclick=()=>{facing=facing==='environment'?'user':'environment';start();};
   el('close-camera').onclick=()=>el('camera-dialog').close();el('camera-dialog').addEventListener('close',stop);
   document.addEventListener('visibilitychange',()=>{if(document.hidden&&el('camera-dialog').open)el('camera-dialog').close();});window.addEventListener('pagehide',stop);
-  return {open(kind,onCapture){mode=kind;receive=onCapture;el('camera-title').textContent=kind==='photo'?'Abadikan momenmu.':'Rekam cerita kecilmu.';el('camera-dialog').showModal();start();}};
+  // HTML Media Capture hands control to the phone camera. Desktop keeps the
+  // live camera; it must not fall back to a generic desktop file picker.
+  function nativeCamera(){return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent||'')||navigator.userAgentData?.mobile===true||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);}
+  for(const kind of ['photo','video']){
+    const input=el('native-'+kind);
+    input.onchange=()=>{const captured=input.files?.[0];if(captured)receive?.(captured);input.value='';};
+  }
+  return {open(kind,onCapture){mode=kind;receive=onCapture;if(nativeCamera()){const input=el('native-'+kind);input.value='';input.click();return;}el('camera-title').textContent=kind==='photo'?'Abadikan momenmu.':'Rekam cerita kecilmu.';el('camera-dialog').showModal();start();}};
 })();
