@@ -1,4 +1,4 @@
-import importlib.util,json,tempfile,threading,unittest,urllib.request,urllib.error
+import hashlib,importlib.util,json,tempfile,threading,unittest,urllib.request,urllib.error
 from pathlib import Path
 from unittest import mock
 spec=importlib.util.spec_from_file_location('album_server',Path(__file__).resolve().parents[1]/'server/server.py');server=importlib.util.module_from_spec(spec);spec.loader.exec_module(server)
@@ -66,4 +66,35 @@ class AlbumTests(unittest.TestCase):
   c=self.config();self.join(c);self.assertEqual(self.request('/api/album/items?offset=-1')[0],400)
   self.assertEqual(self.request('/api/album/admin','POST',{'title':'x','mode':'after','releaseAt':'2026-11-21T20:30','filter':'film'},admin=True)[0],400)
   self.assertEqual(self.request('/api/album/file/../../secret')[0],404)
+ def event_with_pin(self):
+  state={'version':1,'event':{'id':'wedding','name':'Reva & Cesar','date':'2026-11-21'},'guests':[],'logs':[],'pin':hashlib.sha256(b'wedding:123456').hexdigest()}
+  with self.db.connect() as c:c.execute('INSERT INTO events VALUES(?,?,0,?)',('wedding',json.dumps(state),server.now()))
+  return state
+ def test_only_manager_can_inspect_and_delete_before_release(self):
+  c=self.config('after','2099-11-21T20:30:00+07:00');self.join(c);item,data=self.upload()
+  for path in ['/api/album/admin/items','/api/album/admin/file/'+item]:self.assertEqual(self.request(path)[0],401)
+  self.assertEqual(self.request('/api/album/admin/items/'+item,'DELETE')[0],401)
+  self.assertEqual(self.request('/api/album/admin/items',admin=True)[0],200)
+  self.assertEqual(self.request('/api/album/admin/file/'+item,admin=True)[2],data)
+  self.assertEqual(self.request('/api/album/admin/items/'+item,'DELETE',admin=True,headers={'Origin':'https://bad.example'})[0],403)
+  a=album.Album(self.db);thumb=b'\xff\xd8\xff'+b'x'*20+b'\xff\xd9';self.request('/api/album/thumbnail/'+item,'PUT',thumb,mime='image/jpeg',headers={'X-Album-Thumbnail-Key':a.thumbnail_key(item)})
+  self.assertEqual(self.request('/api/album/admin/items/'+item,'DELETE',admin=True)[0],200)
+  self.assertEqual(self.request('/api/album/admin/file/'+item,admin=True)[0],404)
+  self.assertFalse(list(a.directory.glob('*.jpg')))
+  self.assertEqual(self.request('/api/album/thumbnail/'+item,'PUT',thumb,mime='image/jpeg',headers={'X-Album-Thumbnail-Key':a.thumbnail_key(item)})[0],404)
+  self.assertEqual(self.config()['key'],c['key'])
+ def test_reset_checks_pin_and_snapshot_preserves_event_and_qr(self):
+  state=self.event_with_pin();c=self.config();self.join(c);self.upload();self.upload()
+  body={'event':'wedding','pin':'123456','count':2}
+  self.assertEqual(self.request('/api/album/admin/items','DELETE',body)[0],401)
+  self.assertEqual(self.request('/api/album/admin/items','DELETE',{**body,'pin':'654321'},admin=True)[0],403)
+  self.assertEqual(self.request('/api/album/admin/items','DELETE',{**body,'count':1},admin=True)[0],409)
+  self.assertEqual(len(json.loads(self.request('/api/album/items')[2])['items']),2)
+  status,_,raw=self.request('/api/album/admin/items','DELETE',body,admin=True);self.assertEqual(status,200);self.assertEqual(json.loads(raw)['removed'],2)
+  self.assertEqual(json.loads(self.request('/api/album/items')[2])['items'],[])
+  self.assertEqual(json.loads(self.request('/api/album/info')[2])['count'],0)
+  self.assertEqual(album.Album(self.db).config()['key'],c['key'])
+  self.assertEqual(list((Path(self.tmp.name)/'album-media').iterdir()),[])
+  with self.db.connect() as connection:self.assertEqual(json.loads(connection.execute('SELECT state FROM events WHERE id=?',('wedding',)).fetchone()[0]),state)
+  self.upload();self.assertEqual(json.loads(self.request('/api/album/info')[2])['count'],1)
 if __name__=='__main__':unittest.main()

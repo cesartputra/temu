@@ -1,5 +1,5 @@
 """Shared guest album: original files, bounded streaming uploads, timed reveal."""
-import hmac, json, os, re, secrets, tempfile, threading
+import hmac, json, os, re, secrets, tempfile, threading, tarfile, shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
@@ -7,7 +7,7 @@ from http.cookies import SimpleCookie
 
 FILTERS={'original','film','warm','mono'}
 MAX_FILE=100*1024*1024
-MAX_ALBUM=2*1024*1024*1024
+MAX_ALBUM=int(float(os.environ.get('TEMU_ALBUM_MAX_GB','2'))*1024*1024*1024)
 
 class AlbumError(Exception):
     def __init__(self,message,status=400):self.status=status;super().__init__(message)
@@ -21,6 +21,59 @@ def valid_media(mime,head):
             mime=='video/webm' and head.startswith(b'\x1aE\xdf\xa3'))
 
 class Album:
+    def import_archive(self,h):
+        if not getattr(self.db,'allow_import',False):raise AlbumError('Tidak ditemukan.',404)
+        size=int(h.headers.get('Content-Length','0'))
+        if not 0<size<=256*1024*1024:raise AlbumError('Paket migrasi maksimal 256 MB.',413)
+        with self.upload_lock,tempfile.TemporaryDirectory(dir=self.directory,prefix='.migration-') as directory:
+            stage=Path(directory);archive=stage/'archive.tar';remaining=size
+            h.connection.settimeout(90)
+            with archive.open('wb') as f:
+                while remaining:
+                    chunk=h.rfile.read(min(65536,remaining))
+                    if not chunk:raise AlbumError('Migrasi terputus.')
+                    f.write(chunk);remaining-=len(chunk)
+            with tarfile.open(archive,'r:') as package:
+                members=package.getmembers()
+                if len(members)>2000 or any(not m.isfile() or '/' in m.name or '\\' in m.name for m in members) or len({m.name for m in members})!=len(members):raise AlbumError('Paket migrasi tidak valid.')
+                manifest=package.getmember('manifest.json')
+                if manifest.size>1024*1024:raise AlbumError('Manifest terlalu besar.')
+                data=json.load(package.extractfile(manifest));config=data['config'];rows=data['items']
+                if not isinstance(config,dict) or not isinstance(rows,list) or not re.fullmatch(r'[A-Za-z0-9_-]{43}',config.get('key','')):raise AlbumError('Manifest tidak valid.')
+                if config.get('mode') not in ('live','after') or config.get('filter') not in FILTERS or type(config.get('uploadsOpen')) is not bool or not isinstance(config.get('title'),str) or not 1<=len(config['title'])<=120:raise AlbumError('Pengaturan migrasi tidak valid.')
+                if config['mode']=='after' and datetime.fromisoformat(config['releaseAt']).tzinfo is None:raise AlbumError('Waktu migrasi tidak valid.')
+                config={k:config[k] for k in ('key','mode','filter','uploadsOpen','title','releaseAt')}
+                extensions={'image/jpeg':'.jpg','image/png':'.png','image/webp':'.webp','video/mp4':'.mp4','video/quicktime':'.mov','video/webm':'.webm'}
+                files=[];seen=set();used=0
+                for row in rows:
+                    identifier=row['id'];mime=row['mime'];length=row['size']
+                    if not re.fullmatch(r'[a-f0-9]{32}',identifier) or identifier in seen or mime not in extensions or type(length) is not int or not 12<=length<=MAX_FILE or row.get('filter') not in FILTERS:raise AlbumError('Momen migrasi tidak valid.')
+                    if not isinstance(row.get('name'),str) or not 1<=len(row['name'])<=80 or not isinstance(row.get('caption'),str) or len(row['caption'])>300 or datetime.fromisoformat(row['created']).tzinfo is None:raise AlbumError('Metadata migrasi tidak valid.')
+                    seen.add(identifier);used+=length;filename=identifier+extensions[mime];member=package.getmember(filename)
+                    if member.size!=length:raise AlbumError('Ukuran file migrasi tidak sesuai.')
+                    src=package.extractfile(member);head=src.read(32)
+                    if not valid_media(mime,head):raise AlbumError('Format file migrasi tidak sesuai.')
+                    with (stage/filename).open('wb') as f:f.write(head);shutil.copyfileobj(src,f,65536)
+                    files.append(filename)
+                    thumbnail=identifier+'.thumb.jpg'
+                    if thumbnail in {m.name for m in members}:
+                        member=package.getmember(thumbnail)
+                        if member.size>512*1024:raise AlbumError('Pratinjau migrasi terlalu besar.')
+                        with package.extractfile(member) as src,(stage/thumbnail).open('wb') as dst:shutil.copyfileobj(src,dst,65536)
+                        files.append(thumbnail)
+                if used>MAX_ALBUM or {m.name for m in members}!={'manifest.json',*files}:raise AlbumError('Paket migrasi tidak sesuai.')
+            moved=[]
+            try:
+                with self.db.connect() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    if c.execute('SELECT 1 FROM album_settings').fetchone() or c.execute('SELECT 1 FROM album_items').fetchone():raise AlbumError('Album tujuan sudah berisi data. Migrasi dibatalkan.',409)
+                    for filename in files:os.replace(stage/filename,self.directory/filename);moved.append(filename)
+                    c.execute('INSERT INTO album_settings VALUES(1,?)',(json.dumps(config),))
+                    for row in rows:c.execute('INSERT INTO album_items VALUES(?,?,?,?,?,?,?,0)',tuple(row[k] for k in ('id','name','caption','filter','mime','size','created')))
+            except Exception:
+                for filename in moved:(self.directory/filename).unlink(missing_ok=True)
+                raise
+        self.db.backup(force=True);return {'ok':True,'imported':len(rows)}
     def __init__(self,db):
         self.db=db;self.upload_lock=threading.Lock();self.directory=db.directory/'album-media';self.directory.mkdir(mode=0o700,exist_ok=True)
         with db.connect() as c:
@@ -56,8 +109,8 @@ class Album:
         except (KeyError,ValueError):key=''
         if not config or not hmac.compare_digest(config['key'],key):raise AlbumError('Buka album melalui QR atau tautan dari pengantin.',403)
         return config
-    def list_items(self,config,offset=0):
-        if not self.opened(config):raise AlbumError('Galeri belum dibuka. Momenmu tetap tersimpan dengan aman.',403)
+    def list_items(self,config,offset=0,admin=False):
+        if not admin and not self.opened(config):raise AlbumError('Galeri belum dibuka. Momenmu tetap tersimpan dengan aman.',403)
         with self.db.connect() as c:
             rows=c.execute('SELECT id,name,caption,filter,mime,size,created FROM album_items WHERE hidden=0 ORDER BY created DESC,id DESC LIMIT 25 OFFSET ?',(offset,)).fetchall()
         keys=('id','name','caption','filter','mime','size','created')
@@ -111,9 +164,36 @@ class Album:
         if len(data)!=size or not data.startswith(b'\xff\xd8\xff') or not data.endswith(b'\xff\xd9'):raise AlbumError('Pratinjau tidak valid.',415)
         with tempfile.NamedTemporaryFile(dir=self.directory,prefix='.thumb-',delete=False) as f:
             temp=Path(f.name);f.write(data);f.flush();os.fsync(f.fileno())
-        try:os.replace(temp,self.directory/(item+'.thumb.jpg'))
+        try:
+            with self.upload_lock:
+                with self.db.connect() as c:exists=c.execute('SELECT 1 FROM album_items WHERE id=? AND hidden=0',(item,)).fetchone()
+                if not exists:raise AlbumError('Foto tidak ditemukan.',404)
+                os.replace(temp,self.directory/(item+'.thumb.jpg'))
         finally:temp.unlink(missing_ok=True)
         return {'ok':True}
+    def remove(self,item=None,body=None):
+        # Serialize against uploads so reset cannot remove an unfinished file.
+        with self.upload_lock,self.db.lock,self.db.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            if item is None:
+                body=body or {};event=body.get('event');pin=body.get('pin')
+                if not isinstance(event,str) or not isinstance(pin,str) or not re.fullmatch(r'\d{4,12}',pin):raise AlbumError('Masukkan kembali PIN pengelola.',400)
+                if not self.db.verify_pin(event,pin):raise AlbumError('PIN tidak sesuai atau acara belum terhubung.',403)
+                count=c.execute('SELECT count(*) FROM album_items WHERE hidden=0').fetchone()[0]
+                if type(body.get('count')) is not int or body['count']!=count:raise AlbumError('Isi album berubah. Perbarui album sebelum menghapus semuanya.',409)
+            rows=c.execute('SELECT id,mime FROM album_items'+(' WHERE id=?' if item else ''),(item,) if item else ()).fetchall()
+            if item and not rows:raise AlbumError('Momen tidak ditemukan.',404)
+            extensions={'image/jpeg':'.jpg','image/png':'.png','image/webp':'.webp','video/mp4':'.mp4','video/quicktime':'.mov','video/webm':'.webm'}
+            # Hide first: partial disk errors never leave deleted media publicly visible.
+            for identifier,_ in rows:c.execute('UPDATE album_items SET hidden=1 WHERE id=?',(identifier,))
+            c.commit()
+            for identifier,mime in rows:
+                (self.directory/(identifier+extensions[mime])).unlink(missing_ok=True)
+                (self.directory/(identifier+'.thumb.jpg')).unlink(missing_ok=True)
+                c.execute('DELETE FROM album_items WHERE id=?',(identifier,))
+            c.commit()
+        self.db.backup(force=True)
+        return {'ok':True,'removed':len(rows)}
     def serve_file(self,h,item,config,admin=False):
         if not admin and not self.opened(config):raise AlbumError('Galeri belum dibuka.',403)
         with self.db.connect() as c:row=c.execute('SELECT mime,size FROM album_items WHERE id=? AND hidden=0',(item,)).fetchone()
@@ -149,10 +229,25 @@ class Album:
         if not path.startswith('/api/album/'):return False
         try:
             if not h.safe_host():raise AlbumError('Host tidak diizinkan.',403)
-            if h.command in ('POST','PUT'):
+            if h.command in ('POST','PUT','DELETE'):
                 origin=h.headers.get('Origin')
                 if h.headers.get('X-Temu-Album')!='1' or h.headers.get('Sec-Fetch-Site')=='cross-site' or (origin and urlsplit(origin).netloc!=h.headers.get('Host')):raise AlbumError('Permintaan tidak diizinkan.',403)
-            if path=='/api/album/admin':
+            if path.startswith('/api/album/admin/'):
+                if not h.authorized():raise AlbumError('Akses pengelola diperlukan.',401)
+                config=self.config()
+                if path=='/api/album/admin/migration' and h.command=='POST':h.reply(200,self.import_archive(h))
+                elif path=='/api/album/admin/items' and h.command in ('GET','HEAD'):
+                    offset=int(parse_qs(urlsplit(h.path).query).get('offset',['0'])[0])
+                    if not 0<=offset<=100000:raise AlbumError('Halaman tidak valid.')
+                    h.reply(200,{**self.list_items(config,offset,admin=True),'count':self.public(config)['count'] if config else 0})
+                elif re.fullmatch(r'/api/album/admin/file/[a-f0-9]{32}',path) and h.command in ('GET','HEAD'):self.serve_file(h,path.rsplit('/',1)[1],config,admin=True)
+                elif re.fullmatch(r'/api/album/admin/items/[a-f0-9]{32}',path) and h.command=='DELETE':h.reply(200,self.remove(path.rsplit('/',1)[1]))
+                elif path=='/api/album/admin/items' and h.command=='DELETE':
+                    size=int(h.headers.get('Content-Length','0'))
+                    if not 0<size<=1024:raise AlbumError('Permintaan tidak valid.')
+                    h.reply(200,self.remove(body=json.loads(h.rfile.read(size))))
+                else:raise AlbumError('Tidak ditemukan.',404)
+            elif path=='/api/album/admin':
                 if not h.authorized():raise AlbumError('Hubungkan server sebagai pengelola terlebih dahulu.',401)
                 if h.command in ('GET','HEAD'):h.reply(200,{'config':self.config()})
                 elif h.command=='POST':
@@ -182,7 +277,7 @@ class Album:
         except AlbumError as e:
             # Avoid reusing a connection containing unread rejected upload bytes.
             h.close_connection=True;h.reply(e.status,{'error':str(e)})
-        except (ValueError,TypeError,KeyError):h.close_connection=True;h.reply(400,{'error':'Permintaan album tidak valid.'})
+        except (ValueError,TypeError,KeyError,tarfile.TarError):h.close_connection=True;h.reply(400,{'error':'Permintaan album tidak valid.'})
         except (BrokenPipeError,ConnectionResetError):pass
         except (OSError,TimeoutError):h.close_connection=True;h.reply(503,{'error':'Album belum dapat diakses. Silakan coba lagi.'})
         return True

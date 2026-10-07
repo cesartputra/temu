@@ -10,6 +10,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parent))
 from guest_access import GuestAccess, Denied
 from invitation_media import MEDIA_NAMES
 from album import Album
+from album_proxy import AlbumProxy
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_BODY = 20 * 1024 * 1024
@@ -87,6 +88,11 @@ class ClosingConnection(sqlite3.Connection):
         finally:self.close()
 
 class Database:
+    def verify_pin(self,event,pin):
+        if not isinstance(event,str) or not isinstance(pin,str) or not re.fullmatch(r'\d{4,12}',pin):return False
+        with self.connect() as c:row=c.execute('SELECT state FROM events WHERE id=?',(event,)).fetchone()
+        state=json.loads(row[0]) if row else {}
+        return bool(state.get('pin')) and hmac.compare_digest(hashlib.sha256((event+':'+pin).encode()).hexdigest(),state['pin'])
     def __init__(self,directory,backup_dir=None):
         self.directory=Path(directory);self.directory.mkdir(parents=True,exist_ok=True,mode=0o700)
         self.path=self.directory/'temu.sqlite3';self.backup_dir=Path(backup_dir) if backup_dir else self.directory/'backups'
@@ -343,7 +349,8 @@ class Database:
 
 def make_handler(database,token,allowed_hosts):
     guest_access=GuestAccess(database)
-    album=Album(database)
+    upstream=os.environ.get('TEMU_ALBUM_UPSTREAM_URL')
+    album=AlbumProxy(upstream,os.environ.get('TEMU_ALBUM_PROXY_KEY',''),token) if upstream else Album(database)
     class Handler(SimpleHTTPRequestHandler):
         def __init__(self,*args,**kwargs):super().__init__(*args,directory=str(ROOT/'dist'),**kwargs)
         def log_message(self,fmt,*args):pass # Avoid logging credentials, QR values or guest data.
@@ -411,6 +418,7 @@ def make_handler(database,token,allowed_hosts):
             except (BrokenPipeError,ConnectionResetError):pass
         def do_HEAD(self):return self.do_GET()
         def do_DELETE(self):
+            if album.handle(self):return
             path=urlsplit(self.path).path
             match=re.fullmatch(r'/api/events/([A-Za-z0-9_-]{1,200})/guests',path)
             if match:
@@ -508,6 +516,14 @@ def make_handler(database,token,allowed_hosts):
             return super().do_HEAD() if self.command=='HEAD' else super().do_GET()
         def do_POST(self):
             if album.handle(self):return
+            if urlsplit(self.path).path=='/api/admin/verify-pin':
+                if not self.authorized() or self.headers.get('X-Temu-Album')!='1':return self.reply(401,{'error':'Akses pengelola diperlukan.'})
+                try:
+                    size=int(self.headers.get('Content-Length','0'))
+                    if not 0<size<=1024:raise ValueError()
+                    body=json.loads(self.rfile.read(size))
+                    return self.reply(200,{'valid':database.verify_pin(body.get('event'),body.get('pin'))})
+                except (ValueError,TypeError,KeyError):return self.reply(400,{'error':'Permintaan tidak valid.'})
             match=re.fullmatch(r'/api/events/([A-Za-z0-9_-]{1,200})/attendance/reset',urlsplit(self.path).path)
             if match:
                 if not self.authorized() or self.headers.get('X-Temu-Reset')!='1':return self.reply(401,{'error':'Akses pengelola diperlukan.'})
