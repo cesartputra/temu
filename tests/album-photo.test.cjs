@@ -15,9 +15,13 @@ test('portrait upload keeps camera dimensions and draws selected overlay after t
  assert.equal(result.type,'image/jpeg');assert.equal(result.name,'camera-reva-cesar.jpg');assert.equal(h.canvases[0].encoded.width,3024);assert.equal(h.canvases[0].encoded.height,4032);
  assert.equal(h.draws.length,2);assert.equal(h.draws[0].filter,'sepia(.3)');assert.equal(h.draws[1].filter,'none');assert.equal(h.draws[1].image.url,'/album-overlay-v1.png');assert.equal(h.closed.length,1);assert.equal(h.canvases[0].width,1);
 });
-test('overlay fits portrait and landscape photos without cropping or stretching artwork',()=>{
- const h=harness();for(const [w,hgt] of [[3024,4032],[4032,3024],[4000,1000]]){
-  const b=h.photo.placement(w,hgt,3);assert.ok(b.x>=0&&b.y>=0);assert.ok(b.x+b.width<=w&&b.y+b.height<=hgt);assert.ok(b.height<=hgt*.28);assert.equal(b.width/b.height,3);assert.equal(b.x,(w-b.width)/2);
+test('visible overlay artwork touches both sides and bottom on portrait and landscape captures',()=>{
+ const h=harness();for(const [w,hgt] of [[3024,4032],[4032,3024],[3840,2160]]){
+  const b=h.photo.placement(w,hgt,3);
+  assert.ok(Math.abs(b.x+b.width*4/2172)<1e-8);
+  assert.ok(Math.abs(b.x+b.width*2168/2172-w)<1e-8);
+  assert.ok(Math.abs(b.y+b.height*708/724-hgt)<1e-8);
+  assert.ok(b.y>=0);assert.equal(b.width/b.height,3);
  }
 });
 test('missing overlay prevents undecorated upload and permits loading again',async()=>{

@@ -11,8 +11,11 @@ window.TemuAlbumPhoto=(()=>{
     return artwork;
   }
   function placement(width,height,ratio){
-    const w=Math.min(width*.96,height*.28*ratio),h=w/ratio;
-    return {x:(width-w)/2,y:height-h-height*.018,width:w,height:h};
+    // The selected 2172 × 724 PNG has faint transparent padding around its art.
+    // Align visible bounds (x: 4–2168, bottom: 708) with the photo edges.
+    // Bleed the empty padding outside the canvas instead of leaving an inset.
+    const w=width*2172/2164,h=w/ratio;
+    return {x:-w*4/2172,y:height-h*708/724,width:w,height:h};
   }
   async function decode(source){
     if(typeof createImageBitmap==='function'){
