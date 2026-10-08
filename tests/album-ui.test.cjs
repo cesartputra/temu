@@ -8,7 +8,7 @@ function harness(){
  class XHR{constructor(){this.upload={};requests.push(this);}open(method,url){this.url=url;}setRequestHeader(k,v){(this.headers??={})[k]=v;}send(f){this.sent=f;}abort(){this.onabort();}}
  document.querySelector('#guest-name');
  const config={title:'Reva & Cesar',count:0,uploadsOpen:true,revealed:true,filter:'film'};
- const context={document,window:{addEventListener(){}},location:{hash:'',pathname:'/album'},history:{replaceState(){}},fetch:async()=>({ok:true,json:async()=>config}),URL:{createObjectURL:()=> 'blob:moment',revokeObjectURL:u=>revoked.push(u)},URLSearchParams,XMLHttpRequest:XHR,TemuAlbumCamera:{open(){}},TemuAlbumPhoto:{overlay:async()=>({src:'/art.png',naturalWidth:3,naturalHeight:1}),placement:()=>({x:0,y:700,width:1000,height:300}),prepare:async(f,filter,overlay,effect)=>{const result={name:'decorated.jpg',type:'image/jpeg',size:2000};prepared.push({f,filter,overlay,effect,result});return result;}},setInterval(){},Date,AbortSignal};
+ const context={document,window:{addEventListener(){}},location:{hash:'',pathname:'/album'},history:{replaceState(){}},fetch:async()=>({ok:true,json:async()=>config}),URL:{createObjectURL:()=> 'blob:moment',revokeObjectURL:u=>revoked.push(u)},URLSearchParams,XMLHttpRequest:XHR,TemuAlbumCamera:{open(){}},TemuAlbumPhoto:{overlay:async()=>({src:'/art.png',naturalWidth:3,naturalHeight:1}),placement:()=>({x:0,y:700,width:1000,height:300}),prepare:async(f,filter,overlay,effect)=>{const result={name:'decorated.jpg',type:'image/jpeg',size:2000};prepared.push({f,filter,overlay,effect,result});return result;}},TemuAlbumUpload:require('../dist/album-upload.js'),crypto:require('node:crypto').webcrypto,AbortController,sessionStorage:{getItem(){return null},setItem(){},removeItem(){}},setInterval(){},Date,AbortSignal};
  vm.runInNewContext(source,context);
  return {nodes,revoked,requests,prepared,context,run:s=>vm.runInNewContext(s,context),config};
 }
@@ -73,6 +73,6 @@ test('direct storage upload sends only signed headers and confirms before counti
  h.requests[0].status=200;h.requests[0].responseText='';await h.requests[0].onload();assert.equal(confirmed,true);assert.equal(h.config.count,1);
 });
 test('failed storage finalization keeps camera capture and does not count unfinished objects',async()=>{
- const h=harness();await tick();h.config.storage='s3';h.nodes['#guest-name'].value='Bayu';h.context.fetch=async(path)=>({ok:path.endsWith('/uploads'),json:async()=>path.endsWith('/uploads')?{id:'t',token:'x',url:'https://storage.example/u',headers:{'Content-Type':'video/mp4'}}:{error:'File belum lengkap.'}});
+ const h=harness();await tick();h.config.storage='s3';h.nodes['#guest-name'].value='Bayu';h.context.fetch=async(path)=>({ok:path.endsWith('/uploads'),status:path.endsWith('/uploads')?200:415,json:async()=>path.endsWith('/uploads')?{id:'t',token:'x',url:'https://storage.example/u',headers:{'Content-Type':'video/mp4'}}:{error:'File belum lengkap.'}});
  await h.run('selectFile({name:"clip.mp4",type:"video/mp4",size:1024})');await h.nodes['#upload-form'].onsubmit({preventDefault(){}});h.requests[0].status=200;await h.requests[0].onload();assert.equal(h.config.count,0);assert.equal(h.run('file.name'),'clip.mp4');assert.match(h.nodes['#upload-state'].textContent,/belum lengkap/);assert.equal(h.nodes['#upload'].disabled,false);
 });

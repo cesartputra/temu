@@ -4,7 +4,7 @@ No credentials or signed URLs are written to logs. Upload URLs target staging
 keys only; final objects are copied by the server and cannot be overwritten by
 reusing a guest's upload URL.
 """
-import base64, hashlib, hmac, http.client, os, re, ssl, tempfile
+import base64, hashlib, hmac, http.client, os, re, ssl, tempfile, shutil, time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote, urlsplit
@@ -21,6 +21,7 @@ def signing_key(secret,date,region):
     return key
 
 class S3Storage:
+    copy_unavailable=False
     def __init__(self):
         self.endpoint=os.environ.get('TEMU_S3_ENDPOINT','').rstrip('/')
         p=urlsplit(self.endpoint)
@@ -66,14 +67,19 @@ class S3Storage:
         to_sign='AWS4-HMAC-SHA256\n'+stamp+'\n'+scope+'\n'+hashlib.sha256(canonical.encode()).hexdigest()
         signature=hmac.new(signing_key(self.secret,date,self.region),to_sign.encode(),'sha256').hexdigest()
         values['authorization']='AWS4-HMAC-SHA256 Credential='+self.access+'/'+scope+', SignedHeaders='+signed+', Signature='+signature
+        deadline=time.monotonic()+120
         connection=http.client.HTTPSConnection(self.host,timeout=20,context=ssl.create_default_context())
+        def transfer_budget():
+            seconds=deadline-time.monotonic()
+            if seconds<=0:raise StorageError('Transfer Object Storage terlalu lama. Silakan coba lagi.')
+            if connection.sock:connection.sock.settimeout(min(20,seconds))
         try:
             connection.putrequest(method,self.uri(key)+('?' + query if query else ''),skip_host=True,skip_accept_encoding=True)
             for k,v in values.items(): connection.putheader(k,v)
             connection.endheaders()
             if isinstance(body,Path):
                 with body.open('rb') as f:
-                    for chunk in iter(lambda:f.read(65536),b''): connection.send(chunk)
+                    for chunk in iter(lambda:f.read(65536),b''):transfer_budget();connection.send(chunk)
             elif body: connection.send(body)
             response=connection.getresponse();result={k.lower():v for k,v in response.getheaders()}
             data=response.read(limit) if output is None or not 200<=response.status<300 else b''
@@ -89,6 +95,9 @@ class S3Storage:
                 with Path(output).open('wb') as f:
                     remaining=expected
                     while remaining:
+                        remaining_time=deadline-time.monotonic()
+                        if remaining_time<=0:raise StorageError('Transfer Object Storage terlalu lama. Silakan coba lagi.')
+                        if connection.sock:connection.sock.settimeout(min(20,remaining_time))
                         chunk=response.read(min(65536,remaining))
                         if not chunk:raise StorageError('Salinan Object Storage belum lengkap.')
                         f.write(chunk);remaining-=len(chunk)
@@ -101,23 +110,25 @@ class S3Storage:
         _,head=self.request('GET',key,headers={'Range':'bytes=0-31'},limit=32)
         return int(headers.get('content-length','0')),headers.get('content-type','').split(';')[0],headers.get('etag',''),head
     def copy(self,source,target,etag,size,mime):
-        try:_,data=self.request('PUT',target,headers={'x-amz-copy-source':self.uri(source),'x-amz-copy-source-if-match':etag})
-        except StorageError as error:
-            if '(RegionNotAvailable)' not in str(error):raise
-            # This provider rejects CopyObject. Preserve immutable final keys
-            # with a bounded temporary stream, not an overwriteable guest URL.
-            with tempfile.TemporaryDirectory(prefix='temu-s3-copy-') as directory:
-                path=Path(directory)/'media'
-                self.request('GET',source,headers={'If-Match':etag},output=path,expected=size)
-                digest=hashlib.md5()
-                with path.open('rb') as f:
-                    for chunk in iter(lambda:f.read(65536),b''):digest.update(chunk)
-                if etag.strip('"').lower()!=digest.hexdigest():raise StorageError('File berubah saat finalisasi. Silakan bagikan ulang.')
-                self.put_file(target,path,mime)
-            return
-        try:
-            if ET.fromstring(data).tag.rsplit('}',1)[-1]!='CopyObjectResult': raise StorageError('Salinan Object Storage belum berhasil.')
-        except ET.ParseError: raise StorageError('Salinan Object Storage belum berhasil.')
+        if not self.copy_unavailable:
+            try:
+                _,data=self.request('PUT',target,headers={'x-amz-copy-source':self.uri(source),'x-amz-copy-source-if-match':etag})
+                if ET.fromstring(data).tag.rsplit('}',1)[-1]!='CopyObjectResult':raise StorageError('Salinan Object Storage belum berhasil.')
+                return
+            except ET.ParseError:raise StorageError('Salinan Object Storage belum berhasil.')
+            except StorageError as error:
+                if '(RegionNotAvailable)' not in str(error):raise
+                type(self).copy_unavailable=True
+        # One worker streams one file, with disk headroom and byte deadlines.
+        if shutil.disk_usage(tempfile.gettempdir()).free<size+128*1024*1024:raise StorageError('Penyimpanan sementara sedang sibuk. Silakan coba lagi.')
+        with tempfile.TemporaryDirectory(prefix='temu-s3-copy-') as directory:
+            path=Path(directory)/'media'
+            self.request('GET',source,headers={'If-Match':etag},output=path,expected=size)
+            digest=hashlib.md5()
+            with path.open('rb') as f:
+                for chunk in iter(lambda:f.read(65536),b''):digest.update(chunk)
+            if etag.strip('"').lower()!=digest.hexdigest():raise StorageError('File berubah saat finalisasi. Silakan bagikan ulang.')
+            self.put_file(target,path,mime)
     def delete(self,key): self.request('DELETE',key)
     def put_file(self,key,path,mime): self.request('PUT',key,Path(path),{'Content-Type':mime,'Cache-Control':'private, no-store'})
     def put_bytes(self,key,data,mime): self.request('PUT',key,data,{'Content-Type':mime,'Cache-Control':'private, no-store'})

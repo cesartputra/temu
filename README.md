@@ -221,6 +221,16 @@ Metadata album berada di database pada volume persisten. Mode lokal menyimpan fi
 
 Pengaturan → Album bersama → Kelola isi album menampilkan momen sebelum waktu pembukaan galeri. Pengelola dapat menghapus satu momen setelah konfirmasi atau seluruh foto/video setelah memasukkan kembali PIN acara. Reset memeriksa jumlah terbaru, menjaga QR/pengaturan/tamu, dan menghapus file asli serta thumbnail dari penyimpanan aktif. Penghapusan permanen; salinan backup eksternal yang sudah dibuat perlu dikelola terpisah. Menghapus pemilih galeri membatasi alur antarmuka, bukan bukti kriptografis bahwa setiap unggahan berasal dari kamera fisik.
 
+### Antrean asynchronous dan lonjakan tamu
+
+Mode S3 memakai antrean finalisasi persisten di SQLite. Setelah PUT langsung dari HP ke Object Storage, endpoint konfirmasi segera mengembalikan HTTP 202. Satu worker menyelesaikan pemeriksaan dan penyalinan di belakang layar; halaman mengecek status dengan jeda acak. Status unggahan terakhir disimpan pada sesi tab agar membuka ulang halaman melanjutkan pemeriksaan, bukan mengunggah file dua kali. Antrean pulih setelah restart; lease pekerjaan yang terputus dapat diambil kembali setelah 10 menit.
+
+Untuk skenario 300 tamu / 180 pengunggah serentak, maksimal 12 tiket unggah aktif dan 24 tiket belum selesai. Tamu lainnya menunggu di HP dengan retry bertahap dan jitter, bukan memenuhi thread container. Tiket memakai request ID agar retry tidak membuat reservasi ganda. Finalisasi tidak memegang lock metadata selama jaringan/disk I/O, transfer menggunakan potongan 64 KB, dan hanya satu file sementara diproses per worker. Ruang disk sementara harus menyisakan 128 MB; setiap permintaan transfer dibatasi 120 detik. HTTP dibatasi 16 thread pada album dan 32 pada gateway, dengan respons 503/Retry-After ketika penuh. Thumbnail maksimum 512 KB, dua penulisan serentak. Galeri tidak memuat foto ukuran asli otomatis bila thumbnail belum tersedia; foto asli dimuat ketika dibuka.
+
+Reservasi kapasitas mencakup file tersimpan, staging dan salinan final yang belum selesai, kemungkinan pemakaian ulang URL PUT sebelum kedaluwarsa, serta thumbnail. `TEMU_ALBUM_STORAGE_BUDGET_GB` default 9 GiB sebagai plafon konservatif untuk bucket 10 GB; sesuaikan hanya jika kapasitas bucket berubah. `TEMU_ALBUM_MAX_GB` tetap membatasi total media (produksi saat ini 7 GiB). Bucket khusus album ini tidak boleh diisi oleh aplikasi lain karena reservasi dihitung dari metadata Temu. Saat slot/headroom sementara habis, respons 429 membuat tamu menunggu; ketika kapasitas media penuh, respons 413 menghentikan unggahan dengan pesan yang jelas. Antrean mengendalikan beban, bukan menambah kapasitas bucket.
+
+Pengujian otomatis memakai 180 klien foto/video dengan Object Storage tiruan dan memverifikasi seluruh 180 momen, maksimum 12 tiket aktif, 24 tiket tertunda, dan satu penyalinan berat. Ini memverifikasi batas aplikasi; kapasitas jaringan/latensi layanan produksi perlu diamati saat acara.
+
 ### Dua container, alamat album tetap
 
 - Container buku tamu/undangan: 0,5 vCPU, 512 MB, volume `/data` 2 GB; `TEMU_SERVICE_ROLE=guestbook`.

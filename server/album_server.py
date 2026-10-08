@@ -7,6 +7,8 @@ import http.client
 from album import Album
 from album_proxy import internal_target
 from server import Database,encode
+from bounded_http import BoundedHTTPServer
+import album_jobs
 
 class AlbumDatabase(Database):
     allow_import=True
@@ -43,19 +45,11 @@ def main():
     token=os.environ.get('TEMU_SERVER_TOKEN','');proxy=os.environ.get('TEMU_ALBUM_PROXY_KEY','')
     if min(len(token),len(proxy))<32:raise SystemExit('Isi TEMU_SERVER_TOKEN dan TEMU_ALBUM_PROXY_KEY, minimal 32 karakter.')
     os.umask(0o077);db=AlbumDatabase(args.data_dir,os.environ.get('TEMU_GUESTBOOK_URL',''),token,args.backup_dir)
-    server=ThreadingHTTPServer((args.host,args.port),make_album_handler(db,token,proxy));stop=threading.Event()
+    server=BoundedHTTPServer((args.host,args.port),make_album_handler(db,token,proxy),max_workers=16);stop=threading.Event()
     def backup_loop():
         while not stop.wait(300):db.backup(force=True)
     threading.Thread(target=backup_loop,daemon=True).start();print('Album server ready',flush=True)
-    def clean_staging():
-        from album_storage import enabled,StorageError
-        while not stop.wait(60):
-            if enabled():
-                try:
-                    with server.RequestHandlerClass.album.upload_lock:
-                        server.RequestHandlerClass.album.clean_uploads(server.RequestHandlerClass.album.storage())
-                except (StorageError,OSError):pass  # Keep entries for a later cleanup; never log signed URLs.
-    threading.Thread(target=clean_staging,daemon=True).start()
+    album_jobs.start_workers(server.RequestHandlerClass.album,stop)
     try:server.serve_forever()
     except KeyboardInterrupt:pass
     finally:stop.set();db.backup(force=True);server.server_close()

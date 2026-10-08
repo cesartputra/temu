@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest import mock
 from urllib.parse import urlsplit,parse_qs
 import album_test,album_split_test
-import album,album_storage,migrate_album_s3
+import album,album_storage,migrate_album_s3,album_jobs
 
 ENV={'TEMU_ALBUM_STORAGE':'s3','TEMU_S3_ENDPOINT':'https://kencana.basic.box.cloudeka.id','TEMU_S3_REGION':'kencana','TEMU_S3_BUCKET':'test-wedding','TEMU_S3_ACCESS_KEY':'test-access','TEMU_S3_SECRET_KEY':'private-test-secret'}
 PHOTO=b'\xff\xd8\xff'+b'photo'*20
@@ -33,7 +33,13 @@ class UploadCases:
         self.join(self.config());status,_,raw=self.ticket();self.assertEqual(status,200);return json.loads(raw)
     def stage(self,ticket,data=PHOTO,mime='image/jpeg'):
         self.store.files[self.store.key('incoming',ticket['id'],'.jpg')]=(data,mime)
-    def finish_ticket(self,ticket):return self.request('/api/album/uploads/'+ticket['id']+'/complete','POST',{'token':ticket['token']})
+    def finish_ticket(self,ticket):
+        result=self.request('/api/album/uploads/'+ticket['id']+'/complete','POST',{'token':ticket['token']})
+        if result[0]==202:
+            processor=album.Album(self.db_for_media);album_jobs.process_next(processor)
+            result=self.request('/api/album/uploads/'+ticket['id']+'/status','POST',{'token':ticket['token']})
+            if result[0]==200 and not json.loads(result[2]).get('pending'):return 201,result[1],result[2]
+        return result
     def test_staging_is_private_completion_is_idempotent_and_final_bytes_cannot_be_overwritten(self):
         t=self.start();self.assertNotIn('private-test-secret',json.dumps(t));self.stage(t)
         self.assertEqual(json.loads(self.request('/api/album/items')[2])['items'],[])
@@ -44,17 +50,20 @@ class UploadCases:
         status,headers,_=self.raw('/api/album/file/'+t['id']);self.assertEqual(status,307);self.assertIn('/media/',headers['Location'])
         self.assertEqual(self.request('/api/album/upload','PUT',PHOTO,mime='image/jpeg')[0],409)
     def test_wrong_size_magic_token_or_unfinished_object_never_enters_gallery(self):
-        t=self.start();self.assertEqual(self.finish_ticket(t)[0],503)
+        t=self.start();self.assertEqual(self.finish_ticket(t)[0],200)
         self.assertEqual(self.request('/api/album/uploads/'+t['id']+'/complete','POST',{'token':'wrong'})[0],403)
-        self.stage(t,b'<script>'+b'x'*(len(PHOTO)-8));self.assertEqual(self.finish_ticket(t)[0],415)
+        self.stage(t,b'<script>'+b'x'*(len(PHOTO)-8))
+        with self.db_for_media.connect() as c:c.execute('UPDATE album_jobs SET ready=0')
+        self.assertEqual(self.finish_ticket(t)[0],410)
         self.assertEqual(json.loads(self.request('/api/album/info')[2])['count'],0)
-        self.assertFalse(self.store.files)
+        self.assertEqual(json.loads(self.request('/api/album/items')[2])['items'],[])
     def test_pending_quota_expiry_cancellation_and_reset_do_not_allow_stale_completion(self):
         t=self.start()
         with mock.patch.object(album,'MAX_ALBUM',len(PHOTO)):self.assertEqual(self.ticket()[0],413)
         self.stage(t);self.assertEqual(self.request('/api/album/uploads/'+t['id']+'/cancel','POST',{'token':t['token']})[0],200)
         self.stage(t);self.assertEqual(self.finish_ticket(t)[0],410)
         with self.db_for_media.connect() as c:c.execute('UPDATE album_uploads SET expires=0')
+        album.Album(self.db_for_media).clean_uploads(self.store)
         self.assertEqual(self.ticket()[0],200);self.assertNotIn(self.store.key('incoming',t['id'],'.jpg'),self.store.files)
     def test_timed_reveal_closed_upload_and_single_delete_still_apply_to_s3(self):
         t=self.start();self.stage(t);self.finish_ticket(t)

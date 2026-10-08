@@ -10,6 +10,8 @@ sys.path.insert(0,str(Path(__file__).resolve().parent))
 from guest_access import GuestAccess, Denied
 from invitation_media import MEDIA_NAMES
 from album import Album
+from bounded_http import BoundedHTTPServer
+import album_jobs
 from album_proxy import AlbumProxy
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -594,6 +596,7 @@ def make_handler(database,token,allowed_hosts):
                 body=json.loads(self.rfile.read(size));result=database.sync(body);self.reply(200,result)
             except (ValueError,TypeError,KeyError):self.reply(400,{'error':'Format sinkronisasi tidak valid.'})
             except Exception:self.reply(503,{'error':'Penyimpanan server belum tersedia. Perubahan lokal tetap disimpan.'})
+    Handler.album=album
     return Handler
 
 def main():
@@ -605,12 +608,13 @@ def main():
         else:token=secrets.token_urlsafe(32);keypath.write_text(token);os.chmod(keypath,0o600)
     if len(token)<32:raise SystemExit('TEMU_SERVER_TOKEN minimal 32 karakter.')
     hosts={'localhost','127.0.0.1',*filter(None,os.environ.get('TEMU_ALLOWED_HOSTS','').split(','))}
-    server=ThreadingHTTPServer((args.host,args.port),make_handler(database,token,hosts))
+    server=BoundedHTTPServer((args.host,args.port),make_handler(database,token,hosts))
     stop=threading.Event()
     def backups():
         while not stop.wait(300):database.backup(force=True)
     database.backup(force=True);threading.Thread(target=backups,daemon=True).start()
     print(f'Temu siap di http://localhost:{args.port}. Kunci koneksi tersedia di {keypath}',flush=True)
+    if isinstance(server.RequestHandlerClass.album,Album):album_jobs.start_workers(server.RequestHandlerClass.album,stop)
     try:server.serve_forever()
     except KeyboardInterrupt:pass
     finally:stop.set();database.backup(force=True);server.server_close()
