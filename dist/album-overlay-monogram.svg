@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="240" viewBox="0 0 1200 240">
+  <defs><linearGradient id="shade" x2="0" y2="1"><stop stop-color="#15202a" stop-opacity="0"/><stop offset="1" stop-color="#15202a" stop-opacity=".82"/></linearGradient></defs>
+  <path fill="url(#shade)" d="M0 0h1200v240H0z"/>
+  <path d="M420 164h74m212 0h74" stroke="#e5cda2" stroke-width="1.5" opacity=".75"/>
+  <text x="600" y="164" fill="#fff6e6" font-family="Georgia,serif" font-size="86" text-anchor="middle" letter-spacing="4">R&amp;C</text>
+  <text x="600" y="211" fill="#f1deba" font-family="Georgia,serif" font-size="25" text-anchor="middle" letter-spacing="3">21 November 2026</text>
+</svg>

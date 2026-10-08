@@ -2,7 +2,7 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),vm=requir
 const source=fs.readFileSync('dist/album-photo.js','utf8');
 function harness({width=3024,height=4032,failEncode=false,failAsset=false,nativeFilter=true}={}){
  const draws=[],canvases=[],closed=[];
- class Artwork{constructor(){this.naturalWidth=2172;this.naturalHeight=724;}set src(value){this.url=value;queueMicrotask(()=>failAsset?this.onerror():this.onload());}}
+ class Artwork{constructor(){this.naturalWidth=2172;this.naturalHeight=724;}set src(value){if(value.endsWith('.svg')){this.naturalWidth=1200;this.naturalHeight=240;}this.url=value;queueMicrotask(()=>failAsset?this.onerror():this.onload());}}
  const ctx={filter:'none',drawImage:(image,...box)=>draws.push({image,box,filter:ctx.filter})};
  if(!nativeFilter){delete ctx.filter;ctx.getImageData=()=>({data:new Uint8ClampedArray([120,60,30,255])});ctx.putImageData=pixels=>ctx.pixels=pixels.data;}
  const document={createElement(){const c={getContext:()=>ctx,toBlob:(done,type,quality)=>{c.encoded={width:c.width,height:c.height,type,quality};done(failEncode?null:new Blob(['decorated'],{type}));}};canvases.push(c);return c;}};
@@ -37,4 +37,14 @@ test('very large capture fails safely without silently reducing resolution',asyn
 test('bakes monochrome on camera browsers without native Canvas filter support',async()=>{
  const h=harness({nativeFilter:false,width:1,height:1});await h.photo.prepare({name:'camera.jpg'},'grayscale(1)');
  assert.equal(h.ctx.pixels[0],h.ctx.pixels[1]);assert.equal(h.ctx.pixels[1],h.ctx.pixels[2]);assert.equal(h.ctx.pixels[3],255);assert.equal(h.draws.length,2);
+});
+
+test('no overlay never loads artwork and only encodes the filtered photograph',async()=>{
+ const h=harness({failAsset:true});const result=await h.photo.prepare({name:'camera.jpg'},'none','none');assert.equal(h.draws.length,1);assert.equal(result.type,'image/jpeg');
+});
+test('monogram uses its own asset and sits flush along the lower edge',async()=>{
+ const h=harness();await h.photo.prepare({name:'camera.jpg'},'none','monogram');assert.equal(h.draws[1].image.url,'/album-overlay-monogram.svg');assert.deepEqual(h.draws[1].box,[0,4032-3024/5,3024,3024/5]);
+});
+test('Dazz Cam inspired grain is baked into pixels before any overlay',async()=>{
+ const h=harness({nativeFilter:false,width:1,height:1});await h.photo.prepare({name:'camera.jpg'},'none','none','dazz');assert.ok(h.ctx.pixels);assert.notDeepEqual([...h.ctx.pixels],[120,60,30,255]);assert.equal(h.ctx.pixels[3],255);assert.equal(h.draws.length,1);
 });

@@ -1,11 +1,13 @@
 """Shared guest album: original files, bounded streaming uploads, timed reveal."""
-import hmac, json, os, re, secrets, tempfile, threading, tarfile, shutil
+import hmac, json, os, re, secrets, tempfile, threading, tarfile, shutil, time
+import album_storage
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 from http.cookies import SimpleCookie
 
-FILTERS={'original','film','warm','mono'}
+FILTERS={'original','film','warm','mono','dazz'}
+EXTENSIONS={'image/jpeg':'.jpg','image/png':'.png','image/webp':'.webp','video/mp4':'.mp4','video/quicktime':'.mov','video/webm':'.webm'}
 MAX_FILE=100*1024*1024
 MAX_ALBUM=int(float(os.environ.get('TEMU_ALBUM_MAX_GB','2'))*1024*1024*1024)
 
@@ -78,7 +80,9 @@ class Album:
         self.db=db;self.upload_lock=threading.Lock();self.directory=db.directory/'album-media';self.directory.mkdir(mode=0o700,exist_ok=True)
         with db.connect() as c:
             c.executescript('''CREATE TABLE IF NOT EXISTS album_settings(id INTEGER PRIMARY KEY CHECK(id=1),config TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS album_items(id TEXT PRIMARY KEY,name TEXT NOT NULL,caption TEXT NOT NULL,filter TEXT NOT NULL,mime TEXT NOT NULL,size INTEGER NOT NULL,created TEXT NOT NULL,hidden INTEGER NOT NULL DEFAULT 0);''')
+            CREATE TABLE IF NOT EXISTS album_items(id TEXT PRIMARY KEY,name TEXT NOT NULL,caption TEXT NOT NULL,filter TEXT NOT NULL,mime TEXT NOT NULL,size INTEGER NOT NULL,created TEXT NOT NULL,hidden INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS album_objects(id TEXT PRIMARY KEY,object_key TEXT NOT NULL,thumbnail_key TEXT);
+            CREATE TABLE IF NOT EXISTS album_uploads(id TEXT PRIMARY KEY,token TEXT NOT NULL,name TEXT NOT NULL,caption TEXT NOT NULL,filter TEXT NOT NULL,mime TEXT NOT NULL,size INTEGER NOT NULL,expires INTEGER NOT NULL,completed INTEGER NOT NULL DEFAULT 0);''')
             c.execute('INSERT OR IGNORE INTO app_secrets(name,value) VALUES(?,?)',('album-thumbnails',secrets.token_urlsafe(48)))
             self.thumbnail_secret=c.execute('SELECT value FROM app_secrets WHERE name=?',('album-thumbnails',)).fetchone()[0]
     def config(self):
@@ -101,7 +105,7 @@ class Album:
     def opened(self,config):return config['mode']=='live' or datetime.now(timezone.utc)>=datetime.fromisoformat(config['releaseAt'])
     def public(self,config):
         with self.db.connect() as c:count=c.execute('SELECT count(*) FROM album_items WHERE hidden=0').fetchone()[0]
-        return {**{k:v for k,v in config.items() if k!='key'},'revealed':self.opened(config),'count':count,'maxFileMB':MAX_FILE//1024//1024}
+        return {**{k:v for k,v in config.items() if k!='key'},'revealed':self.opened(config),'count':count,'maxFileMB':MAX_FILE//1024//1024,'storage':'s3' if album_storage.enabled() else 'local'}
     def session(self,handler):
         config=self.config()
         try:
@@ -112,10 +116,86 @@ class Album:
     def list_items(self,config,offset=0,admin=False):
         if not admin and not self.opened(config):raise AlbumError('Galeri belum dibuka. Momenmu tetap tersimpan dengan aman.',403)
         with self.db.connect() as c:
-            rows=c.execute('SELECT id,name,caption,filter,mime,size,created FROM album_items WHERE hidden=0 ORDER BY created DESC,id DESC LIMIT 25 OFFSET ?',(offset,)).fetchall()
+            rows=c.execute('SELECT i.id,i.name,i.caption,i.filter,i.mime,i.size,i.created,o.thumbnail_key FROM album_items i LEFT JOIN album_objects o ON i.id=o.id WHERE hidden=0 ORDER BY created DESC,i.id DESC LIMIT 25 OFFSET ?',(offset,)).fetchall()
         keys=('id','name','caption','filter','mime','size','created')
-        return {'items':[{**dict(zip(keys,row)),'thumbnail':(self.directory/(row[0]+'.thumb.jpg')).is_file()} for row in rows[:24]],'next':offset+24 if len(rows)>24 else None}
+        return {'items':[{**dict(zip(keys,row[:7])),'thumbnail':bool(row[7]) or (self.directory/(row[0]+'.thumb.jpg')).is_file()} for row in rows[:24]],'next':offset+24 if len(rows)>24 else None}
+    def read_body(self,h):
+        size=int(h.headers.get('Content-Length','0'))
+        if not 0<size<=4096:raise AlbumError('Permintaan unggahan tidak valid.')
+        body=json.loads(h.rfile.read(size))
+        if not isinstance(body,dict):raise AlbumError('Permintaan unggahan tidak valid.')
+        return body
+    def storage(self):
+        if not album_storage.enabled():raise AlbumError('Unggahan langsung belum diaktifkan.',409)
+        return album_storage.S3Storage()
+    def clean_uploads(self,store):
+        # Expired signed URLs cannot overwrite final media. Reap abandoned staging.
+        with self.db.connect() as c:rows=c.execute('SELECT id,mime,completed FROM album_uploads WHERE expires<? LIMIT 25',(int(time.time()),)).fetchall()
+        for item,mime,completed in rows:
+            store.delete(store.key('incoming',item,EXTENSIONS[mime]))
+            with self.db.connect() as c:c.execute('DELETE FROM album_uploads WHERE id=?',(item,))
+    def begin_upload(self,h,config):
+        if not config['uploadsOpen']:raise AlbumError('Unggahan album sudah ditutup.',403)
+        body=self.read_body(h);size=body.get('size');mime=body.get('mime');preset=body.get('filter','original')
+        name=body.get('name','');caption=body.get('caption','')
+        if type(size) is not int or not 12<=size<=MAX_FILE:raise AlbumError('Batas setiap file adalah 100 MB.',413)
+        if mime not in EXTENSIONS or preset not in FILTERS:raise AlbumError('Format atau filter tidak valid.',415)
+        if not isinstance(name,str) or not 1<=len(name.strip())<=80 or not isinstance(caption,str) or len(caption)>300:raise AlbumError('Nama atau cerita tidak valid.')
+        store=self.storage()
+        with self.upload_lock:
+            self.clean_uploads(store)
+            with self.db.connect() as c:
+                used=c.execute('SELECT coalesce(sum(size),0) FROM album_items').fetchone()[0]
+                reserved=c.execute('SELECT coalesce(sum(size),0) FROM album_uploads WHERE completed<=0').fetchone()[0]
+                if c.execute('SELECT count(*) FROM album_uploads WHERE completed<=0').fetchone()[0]>=100:raise AlbumError('Album sedang menerima banyak momen. Coba lagi sebentar.',429)
+                if used+reserved+size>MAX_ALBUM:raise AlbumError('Album sudah penuh. Hubungi pengantin.',413)
+                item=secrets.token_hex(16);token=secrets.token_urlsafe(32)
+                c.execute('INSERT INTO album_uploads VALUES(?,?,?,?,?,?,?,?,0)',(item,token,name.strip(),caption.strip(),preset,mime,size,int(time.time())+900))
+            url=store.presign('PUT',store.key('incoming',item,EXTENSIONS[mime]),expires=600,mime=mime,size=size)
+        return {'id':item,'token':token,'url':url,'headers':{'Content-Type':mime},'expiresIn':600}
+    def upload_record(self,item,body):
+        with self.db.connect() as c:row=c.execute('SELECT token,name,caption,filter,mime,size,expires,completed FROM album_uploads WHERE id=?',(item,)).fetchone()
+        if not row or not isinstance(body.get('token'),str) or not hmac.compare_digest(row[0],body['token']):raise AlbumError('Tiket unggahan tidak sesuai.',403)
+        if row[6]<int(time.time()):raise AlbumError('Waktu unggahan habis. Silakan bagikan ulang.',410)
+        if row[7]<0:raise AlbumError('Unggahan sudah dibatalkan. Silakan bagikan ulang.',410)
+        return row
+    def complete_upload(self,h,item,config):
+        body=self.read_body(h);store=self.storage()
+        with self.upload_lock:
+            row=self.upload_record(item,body);token,name,caption,preset,mime,size,expires,completed=row
+            if completed:
+                with self.db.connect() as c:exists=c.execute('SELECT 1 FROM album_items WHERE id=? AND hidden=0',(item,)).fetchone()
+                if not exists:raise AlbumError('Momen tidak ditemukan.',404)
+                return {'ok':True,'id':item,'thumbnailKey':self.thumbnail_key(item)}
+            if not config['uploadsOpen']:raise AlbumError('Unggahan album sudah ditutup.',403)
+            source=store.key('incoming',item,EXTENSIONS[mime]);target=store.key('media',item,EXTENSIONS[mime])
+            actual,content_type,etag,head=store.inspect(source)
+            if actual!=size or content_type!=mime or not etag or not valid_media(mime,head):
+                store.delete(source)
+                with self.db.connect() as c:c.execute('DELETE FROM album_uploads WHERE id=?',(item,))
+                raise AlbumError('Unggahan tidak sesuai format atau ukuran. Silakan ambil ulang.',415)
+            # Copy from a matched version to an immutable final key. Guests only
+            # receive signed PUTs for incoming/, never for media/.
+            store.copy(source,target,etag,size,mime)
+            with self.db.connect() as c:
+                c.execute('INSERT INTO album_items VALUES(?,?,?,?,?,?,?,0)',(item,name,caption,preset,mime,size,stamp()))
+                c.execute('INSERT INTO album_objects VALUES(?,?,NULL)',(item,target))
+                c.execute('UPDATE album_uploads SET completed=1 WHERE id=?',(item,))
+            try:store.delete(source)
+            except album_storage.StorageError:pass  # Reaped after the ticket expires.
+        return {'ok':True,'id':item,'thumbnailKey':self.thumbnail_key(item)}
+    def cancel_upload(self,h,item):
+        body=self.read_body(h);store=self.storage()
+        with self.upload_lock:
+            row=self.upload_record(item,body)
+            if row[7]:raise AlbumError('Momen sudah tersimpan.',409)
+            # Retain the reservation until expiry: an unexpired PUT URL can
+            # still finish after cancellation. A later cleanup removes it.
+            store.delete(store.key('incoming',item,EXTENSIONS[row[4]]))
+            with self.db.connect() as c:c.execute('UPDATE album_uploads SET completed=-1 WHERE id=?',(item,))
+        return {'ok':True}
     def upload(self,handler,config):
+        if album_storage.enabled():raise AlbumError('Gunakan tiket unggahan langsung ke Object Storage.',409)
         if not config['uploadsOpen']:raise AlbumError('Unggahan album sudah ditutup.',403)
         try:size=int(handler.headers.get('Content-Length','0'))
         except ValueError:raise AlbumError('Ukuran file tidak valid.')
@@ -168,7 +248,11 @@ class Album:
             with self.upload_lock:
                 with self.db.connect() as c:exists=c.execute('SELECT 1 FROM album_items WHERE id=? AND hidden=0',(item,)).fetchone()
                 if not exists:raise AlbumError('Foto tidak ditemukan.',404)
-                os.replace(temp,self.directory/(item+'.thumb.jpg'))
+                with self.db.connect() as c:obj=c.execute('SELECT object_key FROM album_objects WHERE id=?',(item,)).fetchone()
+                if obj:
+                    store=self.storage();key=store.key('thumbnails',item,'.jpg');store.put_file(key,temp,'image/jpeg')
+                    with self.db.connect() as c:c.execute('UPDATE album_objects SET thumbnail_key=? WHERE id=?',(key,item))
+                else:os.replace(temp,self.directory/(item+'.thumb.jpg'))
         finally:temp.unlink(missing_ok=True)
         return {'ok':True}
     def remove(self,item=None,body=None):
@@ -187,7 +271,17 @@ class Album:
             # Hide first: partial disk errors never leave deleted media publicly visible.
             for identifier,_ in rows:c.execute('UPDATE album_items SET hidden=1 WHERE id=?',(identifier,))
             c.commit()
+            # Reset invalidates pending completions; staging keys remain queued
+            # for deletion after their PUT URL can no longer be reused.
+            if item is None:c.execute('UPDATE album_uploads SET completed=-1 WHERE completed=0');c.commit()
             for identifier,mime in rows:
+                obj=c.execute('SELECT object_key,thumbnail_key FROM album_objects WHERE id=?',(identifier,)).fetchone()
+                if obj:
+                    store=self.storage()
+                    for key in obj:
+                        if key:store.delete(key)
+                    c.execute('DELETE FROM album_objects WHERE id=?',(identifier,))
+                c.execute('UPDATE album_uploads SET completed=-1 WHERE id=?',(identifier,))
                 (self.directory/(identifier+extensions[mime])).unlink(missing_ok=True)
                 (self.directory/(identifier+'.thumb.jpg')).unlink(missing_ok=True)
                 c.execute('DELETE FROM album_items WHERE id=?',(identifier,))
@@ -199,6 +293,12 @@ class Album:
         with self.db.connect() as c:row=c.execute('SELECT mime,size FROM album_items WHERE id=? AND hidden=0',(item,)).fetchone()
         if not row:raise AlbumError('Momen tidak ditemukan.',404)
         mime,size=row;ext={'image/jpeg':'.jpg','image/png':'.png','image/webp':'.webp','video/mp4':'.mp4','video/quicktime':'.mov','video/webm':'.webm'}[mime]
+        with self.db.connect() as c:obj=c.execute('SELECT object_key,thumbnail_key FROM album_objects WHERE id=?',(item,)).fetchone()
+        if obj:
+            query=parse_qs(urlsplit(h.path).query);key=obj[1] if query.get('thumb')==['1'] and obj[1] else obj[0]
+            download='momen-'+item[:8]+ext if query.get('download')==['1'] else None
+            url=self.storage().presign('HEAD' if h.command=='HEAD' else 'GET',key,expires=300,download=download)
+            h.send_response(307);h.send_header('Location',url);h.send_header('Cache-Control','private, no-store');h.send_header('Content-Length','0');h.end_headers();return
         file=self.directory/(item+ext)
         if not file.is_file():raise AlbumError('File belum tersedia.',404)
         if parse_qs(urlsplit(h.path).query).get('thumb')==['1']:
@@ -266,6 +366,9 @@ class Album:
             else:
                 config=self.session(h)
                 if path=='/api/album/info' and h.command in ('GET','HEAD'):h.reply(200,self.public(config))
+                elif path=='/api/album/uploads' and h.command=='POST':h.reply(200,self.begin_upload(h,config))
+                elif re.fullmatch(r'/api/album/uploads/[a-f0-9]{32}/complete',path) and h.command=='POST':h.reply(201,self.complete_upload(h,path.split('/')[-2],config))
+                elif re.fullmatch(r'/api/album/uploads/[a-f0-9]{32}/cancel',path) and h.command=='POST':h.reply(200,self.cancel_upload(h,path.split('/')[-2]))
                 elif path=='/api/album/items' and h.command in ('GET','HEAD'):
                     offset=int(parse_qs(urlsplit(h.path).query).get('offset',['0'])[0])
                     if not 0<=offset<=100000:raise AlbumError('Halaman tidak valid.')
@@ -277,6 +380,7 @@ class Album:
         except AlbumError as e:
             # Avoid reusing a connection containing unread rejected upload bytes.
             h.close_connection=True;h.reply(e.status,{'error':str(e)})
+        except album_storage.StorageError as e:h.close_connection=True;h.reply(503,{'error':str(e)})
         except (ValueError,TypeError,KeyError,tarfile.TarError):h.close_connection=True;h.reply(400,{'error':'Permintaan album tidak valid.'})
         except (BrokenPipeError,ConnectionResetError):pass
         except (OSError,TimeoutError):h.close_connection=True;h.reply(503,{'error':'Album belum dapat diakses. Silakan coba lagi.'})

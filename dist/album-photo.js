@@ -1,16 +1,19 @@
 'use strict';
 window.TemuAlbumPhoto=(()=>{
   const assetURL='/album-overlay-v1.png';
-  let artwork;
-  function overlay(){
-    if(!artwork)artwork=new Promise((resolve,reject)=>{
+  const artworks={};
+  function overlay(style='celebration'){
+    if(style==='none')return Promise.resolve(null);
+    const url=style==='monogram'?'/album-overlay-monogram.svg':assetURL;
+    if(!artworks[style])artworks[style]=new Promise((resolve,reject)=>{
       const image=new Image();image.onload=()=>resolve(image);
-      image.onerror=()=>{artwork=null;reject(Error('Hiasan foto belum dapat dimuat. Periksa koneksi, lalu coba lagi.'));};
-      image.src=assetURL;
+      image.onerror=()=>{delete artworks[style];reject(Error('Hiasan foto belum dapat dimuat. Periksa koneksi, lalu coba lagi.'));};
+      image.src=url;
     });
-    return artwork;
+    return artworks[style];
   }
-  function placement(width,height,ratio){
+  function placement(width,height,ratio,style='celebration'){
+    if(style==='monogram')return {x:0,y:height-width/ratio,width,height:width/ratio};
     // The selected 2172 × 724 PNG has faint transparent padding around its art.
     // Align visible bounds (x: 4–2168, bottom: 708) with the photo edges.
     // Bleed the empty padding outside the canvas instead of leaving an inset.
@@ -46,8 +49,19 @@ window.TemuAlbumPhoto=(()=>{
     }
     ctx.putImageData(pixels,0,0);
   }
-  async function prepare(source,filter='none'){
-    const art=await overlay(),photo=await decode(source);let canvas;
+  function dazzEffect(ctx,width,height){
+    // Fine film grain, lifted shadows and a subtle corner vignette. This is
+    // an original preset inspired by compact film cameras, not a Dazz Cam SDK.
+    const pixels=ctx.getImageData(0,0,width,height),data=pixels.data;let seed=20261121;
+    for(let y=0;y<height;y++)for(let x=0;x<width;x++){
+      const i=(y*width+x)*4;seed=(Math.imul(seed,1664525)+1013904223)>>>0;
+      const grain=((seed>>>24)/255-.5)*12,edge=Math.min(1,((x/width-.5)**2+(y/height-.5)**2)*2),shade=1-edge*.13;
+      for(let c=0;c<3;c++)data[i+c]=Math.max(0,Math.min(255,(data[i+c]*.97+4+grain)*shade));
+    }
+    ctx.putImageData(pixels,0,0);
+  }
+  async function prepare(source,filter='none',style='celebration',effect=''){
+    const art=await overlay(style),photo=await decode(source);let canvas;
     try{
       const width=photo.naturalWidth||photo.width,height=photo.naturalHeight||photo.height;
       if(!width||!height||width*height>24000000||Math.max(width,height)>8192)throw Error('Foto terlalu besar untuk diproses. Ambil ulang dengan resolusi kamera 12 MP.');
@@ -58,8 +72,8 @@ window.TemuAlbumPhoto=(()=>{
       ctx.drawImage(photo,0,0,width,height);
       if(nativeFilter)ctx.filter='none';
       else if(filter!=='none')filterPixels(ctx,width,height,filter);
-      const box=placement(width,height,art.naturalWidth/art.naturalHeight);
-      ctx.drawImage(art,box.x,box.y,box.width,box.height);
+      if(effect==='dazz')dazzEffect(ctx,width,height);
+      if(art){const box=placement(width,height,art.naturalWidth/art.naturalHeight,style);ctx.drawImage(art,box.x,box.y,box.width,box.height);}
       const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.96));
       if(!blob)throw Error('Foto belum berhasil diproses. Ambil ulang dengan resolusi kamera 12 MP.');
       return new File([blob],source.name.replace(/\.[^.]*$/,'')+'-reva-cesar.jpg',{type:'image/jpeg'});

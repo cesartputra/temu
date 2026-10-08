@@ -7,10 +7,10 @@
   <meta name="robots" content="noindex,nofollow">
   <title>Our shared moments · Reva & Cesar</title>
   <link rel="icon" href="icon.svg">
-  <link rel="stylesheet" href="album.css?v=20261007-6">
-  <script defer src="album-camera.js?v=20261007-6"></script>
-  <script defer src="album-photo.js?v=20261007-6"></script>
-  <script defer src="album.js?v=20261007-6"></script>
+  <link rel="stylesheet" href="album.css?v=20261008-1">
+  <script defer src="album-camera.js?v=20261008-1"></script>
+  <script defer src="album-photo.js?v=20261008-1"></script>
+  <script defer src="album.js?v=20261008-1"></script>
 </head>
 <body>
   <header class="site-header">
@@ -61,7 +61,7 @@
             <input id="native-photo" type="file" accept="image/*" capture="environment" hidden aria-label="Ambil foto dengan kamera HP">
             <input id="native-video" type="file" accept="video/*" capture="environment" hidden aria-label="Rekam video dengan kamera HP">
             <div class="camera-actions"><button id="take-photo" class="solid"><span aria-hidden="true">◎</span> Ambil foto</button><button id="take-video" class="outline"><span aria-hidden="true">▷</span> Rekam video</button></div>
-            <p class="camera-hint">Kamera HP terbuka, lalu kembali ke sini untuk membagikan hasilnya. Foto otomatis dihiasi Reva & Cesar beserta enam kucing kami.</p>
+            <p class="camera-hint">Kamera HP terbuka, lalu kembali ke sini untuk membagikan hasilnya. Pilih hiasan favoritmu atau bagikan foto tanpa overlay.</p>
             <button id="discard" type="button" class="file-button" hidden>Hapus pratinjau & ambil ulang</button>
           </div>
           <form id="upload-form" class="upload-card">
@@ -69,12 +69,20 @@
             <label for="guest-name">Momen dari siapa?</label>
             <input id="guest-name" maxlength="80" placeholder="Nama kamu" autocomplete="name" required>
             <fieldset class="filter-fieldset"><legend>Pilih nuansa</legend><div id="filters" class="filters" role="group" aria-label="Filter foto dan video">
-              <button type="button" data-filter="original" aria-pressed="false"><span class="swatch original"><span>R&C</span></span>Asli</button>
+              <button type="button" data-filter="original" aria-pressed="false"><span class="swatch original"><span>R&C</span></span>Original</button>
               <button type="button" data-filter="film" aria-pressed="false"><span class="swatch film"><span>R&C</span></span>Film</button>
-              <button type="button" data-filter="warm" aria-pressed="false"><span class="swatch warm"><span>R&C</span></span>Hangat</button>
-              <button type="button" data-filter="mono" aria-pressed="false"><span class="swatch mono"><span>R&C</span></span>Monokrom</button>
+              <button type="button" data-filter="warm" aria-pressed="false"><span class="swatch warm"><span>R&C</span></span>Warm</button>
+              <button type="button" data-filter="mono" aria-pressed="false"><span class="swatch mono"><span>R&C</span></span>Black &amp; White</button>
+              <button type="button" data-filter="dazz" aria-pressed="false"><span class="swatch dazz"><span>R&amp;C</span></span>Dazz Cam</button>
             </div></fieldset>
-            <p class="small filter-note">Foto disimpan dengan nuansa dan hiasan Reva & Cesar. Nuansa video berlaku pada tampilan album.</p>
+            <p class="small filter-note">Nuansa foto ikut tersimpan. Nuansa video berlaku pada tampilan album.</p>
+            <fieldset id="overlay-fieldset" class="filter-fieldset"><legend>Choose your overlay</legend>
+              <div id="overlays" class="overlays" role="group" aria-label="Hiasan foto">
+                <button type="button" data-overlay="celebration" aria-pressed="true"><span class="overlay-sample celebration">✿ R&amp;C ✿</span><strong>Celebration</strong><small>Pengantin, kucing &amp; floral</small></button>
+                <button type="button" data-overlay="monogram" aria-pressed="false"><span class="overlay-sample monogram">R&amp;C<small>21 NOVEMBER 2026</small></span><strong>Monogram</strong><small>Inisial &amp; tanggal</small></button>
+                <button type="button" data-overlay="none" aria-pressed="false"><span class="overlay-sample clean">◎</span><strong>No overlay</strong><small>Biarkan momennya bercerita</small></button>
+              </div><p class="small">Hiasan berlaku untuk foto. Lihat pratinjaunya sebelum dibagikan.</p>
+            </fieldset>
             <label for="caption">Cerita kecilnya <span>opsional</span></label>
             <textarea id="caption" rows="3" maxlength="300" placeholder="Momen ini bikin aku tersenyum karena…"></textarea>
             <div class="file-info" id="file-info">◎ Belum ada momen diambil.</div>

@@ -35,6 +35,7 @@ def make_album_handler(database,token,proxy_key):
             if urlsplit(self.path).path=='/health' and self.command in ('GET','HEAD'):return self.reply(200,{'ok':True,'service':'album'})
             if not album.handle(self):self.reply(404,{'error':'Tidak ditemukan.'})
         do_GET=do_HEAD=do_POST=do_PUT=do_DELETE=dispatch
+    Handler.album=album
     return Handler
 
 def main():
@@ -46,6 +47,15 @@ def main():
     def backup_loop():
         while not stop.wait(300):db.backup(force=True)
     threading.Thread(target=backup_loop,daemon=True).start();print('Album server ready',flush=True)
+    def clean_staging():
+        from album_storage import enabled,StorageError
+        while not stop.wait(60):
+            if enabled():
+                try:
+                    with server.RequestHandlerClass.album.upload_lock:
+                        server.RequestHandlerClass.album.clean_uploads(server.RequestHandlerClass.album.storage())
+                except (StorageError,OSError):pass  # Keep entries for a later cleanup; never log signed URLs.
+    threading.Thread(target=clean_staging,daemon=True).start()
     try:server.serve_forever()
     except KeyboardInterrupt:pass
     finally:stop.set();db.backup(force=True);server.server_close()

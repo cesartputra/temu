@@ -34,7 +34,7 @@ class AlbumProxy:
             h.close_connection=True;h.reply(413,{'error':'Ukuran unggahan tidak valid.'});return True
         if not self.slots.acquire(blocking=False):
             h.close_connection=True;h.reply(503,{'error':'Album sedang sibuk. Coba lagi sebentar; buku tamu tetap dapat digunakan.'});return True
-        connection=http.client.HTTPConnection(self.host,self.port,timeout=90 if h.command=='PUT' else 8);started=False
+        connection=http.client.HTTPConnection(self.host,self.port,timeout=90 if h.command in ('PUT','POST') else 8);started=False
         try:
             connection.connect();connection.putrequest(h.command,h.path,skip_host=True,skip_accept_encoding=True)
             allowed={'host','origin','cookie','authorization','content-type','content-length','range','sec-fetch-site','x-temu-album','x-album-name','x-album-caption','x-album-filter','x-album-thumbnail-key'}
@@ -49,7 +49,7 @@ class AlbumProxy:
                     connection.send(chunk);remaining-=len(chunk)
             r=connection.getresponse();h.send_response(r.status)
             for name,value in r.getheaders():
-                if name.lower() in ('content-type','content-length','content-range','content-disposition','set-cookie','accept-ranges','cross-origin-resource-policy'):h.send_header(name,value)
+                if name.lower() in ('content-type','content-length','content-range','content-disposition','set-cookie','accept-ranges','cross-origin-resource-policy','location'):h.send_header(name,value)
             h.send_header('Cache-Control','private, no-store');h.end_headers();started=True
             if h.command!='HEAD':
                 while True:
