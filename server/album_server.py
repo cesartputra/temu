@@ -48,7 +48,7 @@ def main():
     server=BoundedHTTPServer((args.host,args.port),make_album_handler(db,token,proxy),max_workers=16);stop=threading.Event()
     def backup_loop():
         while not stop.wait(300):db.backup(force=True)
-    threading.Thread(target=backup_loop,daemon=True).start();print('Album server ready',flush=True)
+    threading.Thread(target=backup_loop,daemon=True).start();print('Album server ready; finalization workers:',server.RequestHandlerClass.album.worker_count,flush=True)
     album_jobs.start_workers(server.RequestHandlerClass.album,stop)
     try:server.serve_forever()
     except KeyboardInterrupt:pass

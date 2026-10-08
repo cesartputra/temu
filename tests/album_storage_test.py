@@ -45,7 +45,8 @@ class UploadCases:
         self.assertEqual(json.loads(self.request('/api/album/items')[2])['items'],[])
         self.assertEqual(self.finish_ticket(t)[0],201);self.assertEqual(self.finish_ticket(t)[0],201)
         self.assertEqual(json.loads(self.request('/api/album/info')[2])['count'],1)
-        final=self.store.key('media',t['id'],'.jpg');self.stage(t,b'changed after completion')
+        with self.db_for_media.connect() as c:final=c.execute('SELECT object_key FROM album_objects WHERE id=?',(t['id'],)).fetchone()[0]
+        self.stage(t,b'changed after completion')
         self.assertEqual(self.store.files[final][0],PHOTO)
         status,headers,_=self.raw('/api/album/file/'+t['id']);self.assertEqual(status,307);self.assertIn('/media/',headers['Location'])
         self.assertEqual(self.request('/api/album/upload','PUT',PHOTO,mime='image/jpeg')[0],409)
@@ -69,8 +70,9 @@ class UploadCases:
         t=self.start();self.stage(t);self.finish_ticket(t)
         self.config('after','2099-11-21T20:30:00+07:00');self.assertEqual(self.raw('/api/album/file/'+t['id'])[0],403)
         self.config(uploads=False);self.assertEqual(self.ticket()[0],403)
+        with self.db_for_media.connect() as c:final=c.execute('SELECT object_key FROM album_objects WHERE id=?',(t['id'],)).fetchone()[0]
         self.assertEqual(self.request('/api/album/admin/items/'+t['id'],'DELETE',admin=True)[0],200)
-        self.assertNotIn(self.store.key('media',t['id'],'.jpg'),self.store.files);self.assertEqual(self.raw('/api/album/file/'+t['id'])[0],404)
+        self.assertNotIn(final,self.store.files);self.assertEqual(self.raw('/api/album/file/'+t['id'])[0],404)
 
 class LocalS3Tests(UploadCases,unittest.TestCase):
     fixture=album_test.AlbumTests;request=fixture.request;config=fixture.config;join=fixture.join
@@ -114,3 +116,17 @@ class CopyFallbackTests(unittest.TestCase):
                         with self.assertRaises(album_storage.StorageError):store.copy('incoming','final',etag,len(PHOTO),'image/jpeg')
                     else:store.copy('incoming','final',etag,len(PHOTO),'image/jpeg')
                 self.assertEqual(saved,[] if changed else [PHOTO]);self.assertTrue(paths);self.assertFalse(paths[0].exists())
+
+class TemporarySpaceTests(unittest.TestCase):
+    def test_parallel_workers_reserve_space_before_downloading_and_release_on_failure(self):
+        size=100*1024*1024
+        free=128*1024*1024+size+size//2
+        with mock.patch.object(album_storage.shutil,'disk_usage',return_value=type('Disk',(),{'free':free})()):
+            with self.assertRaisesRegex(RuntimeError,'test failure'):
+                with album_storage.temporary_space(size):
+                    with self.assertRaises(album_storage.StorageError):
+                        with album_storage.temporary_space(size):self.fail('overcommitted disk')
+                    raise RuntimeError('test failure')
+            self.assertEqual(album_storage._temporary_reserved,0)
+            with album_storage.temporary_space(size):self.assertEqual(album_storage._temporary_reserved,size)
+        self.assertEqual(album_storage._temporary_reserved,0)

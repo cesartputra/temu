@@ -4,13 +4,29 @@ No credentials or signed URLs are written to logs. Upload URLs target staging
 keys only; final objects are copied by the server and cannot be overwritten by
 reusing a guest's upload URL.
 """
-import base64, hashlib, hmac, http.client, os, re, ssl, tempfile, shutil, time
+import base64, hashlib, hmac, http.client, os, re, ssl, tempfile, shutil, threading, time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 from xml.etree import ElementTree as ET
 
 class StorageError(Exception): pass
+
+_temporary_lock=threading.Lock()
+_temporary_reserved=0
+
+@contextmanager
+def temporary_space(size):
+    """Reserve space across workers, including downloads not yet on disk."""
+    global _temporary_reserved
+    with _temporary_lock:
+        if shutil.disk_usage(tempfile.gettempdir()).free < _temporary_reserved+size+128*1024*1024:
+            raise StorageError('Penyimpanan sementara sedang sibuk. Silakan coba lagi.')
+        _temporary_reserved+=size
+    try:yield
+    finally:
+        with _temporary_lock:_temporary_reserved-=size
 
 def enabled(): return os.environ.get('TEMU_ALBUM_STORAGE','local')=='s3'
 def escaped(value): return quote(str(value),safe='-_.~')
@@ -119,9 +135,8 @@ class S3Storage:
             except StorageError as error:
                 if '(RegionNotAvailable)' not in str(error):raise
                 type(self).copy_unavailable=True
-        # One worker streams one file, with disk headroom and byte deadlines.
-        if shutil.disk_usage(tempfile.gettempdir()).free<size+128*1024*1024:raise StorageError('Penyimpanan sementara sedang sibuk. Silakan coba lagi.')
-        with tempfile.TemporaryDirectory(prefix='temu-s3-copy-') as directory:
+        # Each worker streams one file; shared reservations protect disk space.
+        with temporary_space(size),tempfile.TemporaryDirectory(prefix='temu-s3-copy-') as directory:
             path=Path(directory)/'media'
             self.request('GET',source,headers={'If-Match':etag},output=path,expected=size)
             digest=hashlib.md5()
