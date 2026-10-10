@@ -7,11 +7,12 @@
   <meta name="robots" content="noindex,nofollow">
   <title>Our shared moments · Reva & Cesar</title>
   <link rel="icon" href="icon.svg">
-  <link rel="stylesheet" href="album.css?v=20261008-2">
+  <link rel="stylesheet" href="album.css?v=20261011-1">
   <script defer src="album-camera.js?v=20261008-2"></script>
   <script defer src="album-photo.js?v=20261008-2"></script>
   <script defer src="album-upload.js?v=20261008-2"></script>
-  <script defer src="album.js?v=20261008-2"></script>
+  <script defer src="album-loading.js?v=20261011-1"></script>
+  <script defer src="album.js?v=20261011-1"></script>
 </head>
 <body>
   <header class="site-header">
@@ -33,6 +34,7 @@
       </div>
     </section>
     <p id="status" class="notice" role="status">Membuka album…</p>
+    <div id="album-loading" class="album-loading" role="status"><span class="album-spinner" aria-hidden="true"></span><span>Menyiapkan kenangan kita…</span></div>
     <section id="gate" class="gate" hidden>
       <span class="gate-icon" aria-hidden="true">✉</span>
       <span class="eyebrow">UNDANGAN UNTUK BERBAGI</span>
@@ -97,7 +99,8 @@
         <div class="section-title"><div><span class="eyebrow">DARI SEMUA YANG HADIR</span><h2 id="gallery-title">A roll of <em>good times.</em></h2></div><p id="gallery-description">Banyak sudut pandang.<br> Satu hari yang istimewa.</p></div>
         <div class="gallery-toolbar"><select id="media-type" aria-label="Tampilkan jenis momen"><option value="all">Semua momen</option><option value="photo">Foto saja</option><option value="video">Video saja</option></select><button id="refresh" class="outline">Perbarui ↻</button></div>
         <div id="locked" class="locked" hidden><span class="gate-icon" aria-hidden="true">✧</span><span class="eyebrow">KENANGAN SEDANG DIKUMPULKAN</span><h3>Good things<br><em>are worth the wait.</em></h3><p id="release-copy"></p><p>Kamu tetap bisa berbagi momen sekarang.<br>Galeri akan terbuka saat waktunya tiba.</p><button id="share-first" class="solid">Ambil momen ◎</button></div>
-        <div id="grid" class="moment-grid"></div>
+        <div id="gallery-loading" class="album-loading gallery-loading" role="status" hidden><span class="album-spinner" aria-hidden="true"></span><span>Memuat momen…</span></div>
+        <div id="grid" class="moment-grid" aria-busy="false"></div>
         <div id="gallery-empty" class="empty" hidden><span aria-hidden="true">♡</span><h3>Roll pertama masih menanti.</h3><p>Jadilah yang pertama mengabadikan cerita.</p><button id="share-empty" class="solid">Bagikan momen pertama ↗</button></div>
         <button id="more" class="outline full" hidden>Lihat lebih banyak ↓</button>
       </section>
