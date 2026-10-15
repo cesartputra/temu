@@ -2,13 +2,13 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),vm=requir
 const source=fs.readFileSync('dist/album-camera.js','utf8');
 const tick=()=>new Promise(setImmediate);
 function harness(getMedia,mobile={}){
- const nodes={},tracks=[],captures=[],recorders=[];let context;
- const make=()=>({style:{},hidden:false,attributes:{},classList:{remove(){},add(){}},setAttribute(k,v){this.attributes[k]=v;},getAttribute(k){return this.attributes[k]||null;},pause(){},open:false,disabled:false,textContent:'',srcObject:null,videoWidth:1920,videoHeight:1080,listeners:{},addEventListener(event,fn){this.listeners[event]=fn;},showModal(){this.open=true;},close(){this.open=false;this.listeners.close?.();},async play(){},value:'',files:[],click(){this.clicked=true;}});
+ const nodes={},tracks=[],captures=[],recorders=[],draws=[],canvases=[];let context;let landscape=false;const events={};
+ const make=()=>({getBoundingClientRect:()=>({width:360,height:480}),style:{},hidden:false,attributes:{},classList:{remove(){},add(){}},setAttribute(k,v){this.attributes[k]=v;},getAttribute(k){return this.attributes[k]||null;},pause(){},open:false,disabled:false,textContent:'',srcObject:null,videoWidth:1920,videoHeight:1080,listeners:{},addEventListener(event,fn){this.listeners[event]=fn;},showModal(){this.open=true;},close(){this.open=false;this.listeners.close?.();},async play(){},value:'',files:[],click(){this.clicked=true;}});
  const stream=()=>{const track={stopped:false,stop(){this.stopped=true;}};tracks.push(track);return {getTracks:()=>[track]};};
  class Recorder{static isTypeSupported(m){return m==='video/mp4';}constructor(){this.state='inactive';this.mimeType='video/mp4';recorders.push(this);}start(){this.state='recording';}stop(){this.state='inactive';this.ondataavailable?.({data:new Blob(['camera-video'])});this.onstop?.();}}
- const document={hidden:false,getElementById(id){return nodes[id]??=make();},addEventListener(event,fn){this[event]=fn;},createElement(){return {getContext:()=>({drawImage(){}}),toBlob(fn){fn(new Blob(['jpeg-camera-frame'],{type:'image/jpeg'}));}};}};
- context={window:{MediaRecorder:Recorder,addEventListener(){}},MediaRecorder:Recorder,document,navigator:{...mobile,mediaDevices:{getUserMedia:constraints=>getMedia?getMedia(constraints,stream):Promise.resolve(stream())}},Blob,File:class extends Blob{constructor(parts,name,opts){super(parts,opts);this.name=name;}},setInterval(){return 1;},clearInterval(){},Date,Error};vm.runInNewContext(source,context);
- return {api:context.window.TemuAlbumCamera,nodes,tracks,captures,recorders,document,stream};
+ const document={hidden:false,getElementById(id){return nodes[id]??=make();},addEventListener(event,fn){this[event]=fn;},createElement(){const canvas={getContext:()=>({drawImage(...args){draws.push(args);canvases.push([canvas.width,canvas.height]);}}),toBlob(fn){fn(new Blob(['jpeg-camera-frame'],{type:'image/jpeg'}));}};return canvas;}};
+ context={window:{matchMedia:()=>({matches:landscape}),MediaRecorder:Recorder,addEventListener(n,fn){events[n]=fn;}},MediaRecorder:Recorder,document,navigator:{...mobile,mediaDevices:{getUserMedia:constraints=>getMedia?getMedia(constraints,stream):Promise.resolve(stream())}},Blob,File:class extends Blob{constructor(parts,name,opts){super(parts,opts);this.name=name;}},setInterval(){return 1;},clearInterval(){},Date,Error};vm.runInNewContext(source,context);
+ return {api:context.window.TemuAlbumCamera,nodes,tracks,captures,recorders,document,stream,draws,canvases,rotate(value){landscape=value;events.resize();}};
 }
 test('photo comes from camera frame and releases camera after capture',async()=>{
  const h=harness();h.api.open('photo',f=>h.captures.push(f));await tick();await h.nodes['camera-shutter'].onclick();
@@ -46,4 +46,12 @@ test('iPhone video and iPad desktop mode use native camera without requesting br
   const h=harness(()=>assert.fail('Native capture does not use browser microphone'),mobile);h.api.open('video',f=>h.captures.push(f));assert.equal(h.nodes['native-video'].clicked,true);
   const video=new Blob(['original-mov'],{type:'video/quicktime'});h.nodes['native-video'].files=[video];h.nodes['native-video'].onchange();assert.equal(h.captures[0],video);
  }
+});
+
+test('portrait and landscape preview crops match the photo capture and fit the stage',async()=>{
+ const h=harness();h.api.open('photo',f=>h.captures.push(f));await tick();
+ assert.equal(h.api.frame().width/h.api.frame().height,3/4);assert.equal(h.nodes['viewfinder'].style.width,'360px');assert.equal(h.nodes['viewfinder'].style.height,'480px');
+ await h.nodes['camera-shutter'].onclick();assert.equal(h.canvases[0][0]/h.canvases[0][1],3/4);assert.equal(h.draws[0].length,9);
+ h.api.open('photo',f=>h.captures.push(f));await tick();h.rotate(true);assert.equal(h.api.frame().width/h.api.frame().height,4/3);
+ await h.nodes['camera-shutter'].onclick();assert.equal(h.canvases[1][0]/h.canvases[1][1],4/3);assert.equal(h.captures.length,2);
 });

@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#faf5ec">
+  <meta name="theme-color" content="#121a14">
   <meta name="robots" content="noindex,nofollow">
   <title>Our shared moments · Reva & Cesar</title>
   <link rel="icon" href="icon.svg">
-  <link rel="stylesheet" href="album.css?v=20261015-1">
-  <script defer src="album-camera.js?v=20261015-1"></script>
+  <link rel="stylesheet" href="album.css?v=20261015-2">
+  <script defer src="album-camera.js?v=20261015-2"></script>
   <script defer src="album-photo.js?v=20261008-2"></script>
   <script defer src="album-upload.js?v=20261008-2"></script>
-  <script defer src="album-loading.js?v=20261015-1"></script>
-  <script defer src="album.js?v=20261015-1"></script>
+  <script defer src="album-loading.js?v=20261011-2"></script>
+  <script defer src="album.js?v=20261015-2"></script>
 </head>
 <body class="cover-closed">
   <section id="album-cover" class="album-cover" aria-labelledby="cover-title">
@@ -24,33 +24,21 @@
     <p class="cover-footnote">Hari kita. Lewat matamu.</p>
   </section>
   <div id="album-app" inert>
-  <header class="site-header">
-    <a href="#" class="wordmark" aria-label="Album Reva dan Cesar">R <i>&</i> C</a>
-    <span class="header-tag">#foREVArwithCESAR</span>
-  </header>
-  <main>
-    <section class="hero" aria-labelledby="album-title">
-      <div class="hero-copy"><span class="eyebrow">WEDDING MEMORIES</span><h1 id="album-title">Reva <em>&amp;</em> Cesar</h1><p>Hari kita. Lewat matamu.</p><div class="hero-meta"><span>21 NOVEMBER 2026</span><span class="meta-dot" aria-hidden="true">·</span><span>#foREVArwithCESAR</span></div></div>
-    </section>
-    <p id="status" class="notice" role="status">Membuka album…</p>
-    <div id="album-loading" class="album-loading" role="status"><span class="album-spinner" aria-hidden="true"></span><span>Menyiapkan kenangan kita…</span></div>
-    <section id="gate" class="gate" hidden>
-      <span class="gate-icon" aria-hidden="true">✉</span>
-      <span class="eyebrow">UNDANGAN UNTUK BERBAGI</span>
-      <h2>Satu QR,<br><em>banyak cerita.</em></h2>
-      <p>Pindai QR album di meja tamu atau buka tautan yang kami bagikan. Momen dari kameramu akan menjadi bagian dari kenangan kita.</p>
-      <button id="retry" class="outline">Coba lagi ↻</button>
-    </section>
-    <div id="content" hidden>
-      <nav class="tabs" aria-label="Navigasi album">
-        <button id="tab-capture" class="selected" aria-pressed="true" aria-controls="capture"><span class="nav-icon" aria-hidden="true">◎</span> Bagikan momen</button>
-        <button id="tab-gallery" aria-pressed="false" aria-controls="gallery"><span class="nav-icon" aria-hidden="true">▦</span> Lihat album <span id="count" class="count">0</span></button>
-      </nav>
-      <section id="capture" aria-labelledby="capture-title">
-        <h2 id="capture-title" class="sr-only">Abadikan momenmu.</h2>
-        <div class="capture-layout">
-          <div class="camera-card">
-            <div class="camera-toolbar"><span><span class="live-dot" aria-hidden="true"></span> OUR SHARED ROLL</span><span>EST. 2026</span></div>
+    <p id="status" class="notice" role="status" hidden></p>
+    <div id="album-loading" class="album-loading" role="status"><span class="album-spinner" aria-hidden="true"></span><span>Menyiapkan album…</span></div>
+    <section id="gate" class="welcome-page" hidden><span class="eyebrow">UNDANGAN UNTUK BERBAGI</span><h1>Satu QR,<br><em>banyak cerita.</em></h1><p>Pindai QR album di meja tamu atau buka tautan album yang kami bagikan.</p><button id="retry" class="solid" type="button">Coba lagi</button></section>
+    <main id="content" hidden>
+      <section id="name-step" class="welcome-page" aria-labelledby="name-title">
+        <a class="wordmark" href="#" aria-label="Album Reva dan Cesar">R <i>&amp;</i> C</a>
+        <span class="eyebrow">A LITTLE MEMORY, WITH LOVE</span>
+        <h1 id="name-title">Kenalan<br><em>dulu, yuk.</em></h1>
+        <p>Supaya kami tahu dari siapa<br>kenangan indah ini datang.</p>
+        <form id="name-form"><label for="guest-name">Nama kamu</label><input id="guest-name" maxlength="80" placeholder="Tulis nama kamu" autocomplete="name" required><button id="continue-camera" class="solid full" type="submit">Lanjut ke kamera <span aria-hidden="true">↗</span></button></form>
+        <p class="small">Reva &amp; Cesar · 21 November 2026</p>
+      </section>
+      <section id="capture" class="camera-page-content" aria-labelledby="capture-title" hidden>
+        <header class="studio-header"><div><span class="eyebrow">WEDDING MEMORIES</span><h2 id="capture-title">Reva <em>&amp;</em> Cesar</h2></div><button id="edit-name" class="text-button" type="button" aria-label="Ubah nama tamu">Nama ↗</button></header>
+        <div class="camera-card">
             <fieldset id="overlay-fieldset" class="filter-fieldset"><legend>Pilih bingkai</legend>
               <div id="overlays" class="overlays" role="group" aria-label="Bingkai foto">
                 <button type="button" data-overlay="celebration" aria-pressed="true"><span class="overlay-sample celebration">✿ R&amp;C ✿</span><strong>Celebration</strong><small>Pengantin, kucing &amp; floral</small></button>
@@ -58,16 +46,14 @@
                 <button type="button" data-overlay="none" aria-pressed="false"><span class="overlay-sample clean">◎</span><strong>No overlay</strong><small>Biarkan momennya bercerita</small></button>
               </div><p class="small">Bingkai ikut tersimpan pada fotomu.</p>
             </fieldset>
-            <div id="viewfinder" class="viewfinder">
-              <div id="placeholder"><span class="camera-drawing" aria-hidden="true"><span></span></span><h3>Momen yang kecil,<br>kenangan yang besar.</h3><p>Aktifkan kamera, pilih bingkai,
-lalu abadikan momennya.</p></div>
-              <video id="camera-live" autoplay muted playsinline hidden aria-label="Pratinjau kamera langsung"></video>
-              <img id="photo-preview" alt="Pratinjau foto hasil kameramu" hidden>
-              <img id="photo-overlay" class="photo-overlay" alt="" aria-hidden="true" hidden>
-              <video id="video-preview" controls playsinline preload="metadata" hidden></video>
-              <span class="viewfinder-corner" aria-hidden="true"></span>
-              <span id="preview-label" class="preview-label" hidden>PRATINJAU · FILM</span>
-            </div>
+          <div id="camera-stage" class="camera-stage"><div id="viewfinder" class="viewfinder">
+            <div id="placeholder"><span aria-hidden="true">◎</span><p>Aktifkan kamera untuk<br>mengabadikan momenmu.</p></div>
+            <video id="camera-live" autoplay muted playsinline hidden aria-label="Pratinjau kamera langsung"></video>
+            <img id="photo-preview" alt="Pratinjau foto hasil kameramu" hidden>
+            <img id="photo-overlay" class="photo-overlay" alt="" aria-hidden="true" hidden>
+            <video id="video-preview" controls playsinline preload="metadata" hidden></video>
+            <span id="preview-label" class="preview-label" hidden></span>
+          </div></div>
             <fieldset class="filter-fieldset"><legend>Pilih filter</legend><div id="filters" class="filters" role="group" aria-label="Filter foto dan video">
               <button type="button" data-filter="original" aria-pressed="false"><span class="swatch original"><span>R&C</span></span>Original</button>
               <button type="button" data-filter="film" aria-pressed="false"><span class="swatch film"><span>R&C</span></span>Film</button>
@@ -75,45 +61,43 @@ lalu abadikan momennya.</p></div>
               <button type="button" data-filter="mono" aria-pressed="false"><span class="swatch mono"><span>R&C</span></span>Black &amp; White</button>
               <button type="button" data-filter="dazz" aria-pressed="false"><span class="swatch dazz"><span>R&amp;C</span></span>Dazz Cam</button>
             </div></fieldset>
-            <p class="small filter-note">Nuansa foto ikut tersimpan. Nuansa video berlaku pada tampilan album.</p>
+          <div class="camera-bottom">
             <div id="camera-controls" class="camera-controls" hidden>
-              <button id="camera-switch" type="button" class="camera-round" aria-label="Ganti kamera depan atau belakang">⇄</button>
+              <button id="camera-switch" type="button" class="icon-button camera-round" aria-label="Ganti kamera depan atau belakang"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h15m-4-4 4 4-4 4M20 17H5m4-4-4 4 4 4"/></svg></button>
               <button id="camera-shutter" type="button" class="camera-shutter" aria-label="Ambil foto" disabled><span aria-hidden="true"></span></button>
-              <button id="close-camera" type="button" class="camera-round" aria-label="Hentikan kamera">✕</button>
+              <button id="close-camera" type="button" class="icon-button camera-round" aria-label="Hentikan kamera"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
             </div>
+            <div id="camera-actions" class="camera-actions"><button id="take-photo" class="solid" type="button">Aktifkan kamera</button><button id="take-video" class="outline" type="button">Rekam video</button></div>
+            <button id="review-capture" class="solid full" type="button" hidden>Bagikan momen ini ↗</button>
             <p id="camera-status" class="camera-status" role="status"></p>
-            <input id="native-video" type="file" accept="video/*" capture="environment" hidden aria-label="Rekam video dengan kamera HP">
-            <div id="camera-actions" class="camera-actions"><button id="take-photo" class="solid"><span aria-hidden="true">◎</span> Aktifkan kamera</button><button id="take-video" class="outline"><span aria-hidden="true">▷</span> Rekam video</button></div>
-            <p class="camera-hint">Foto diambil langsung di sini. Pilih bingkai di atas dan filter di bawah preview, lalu bagikan kenanganmu.</p>
-            <button id="discard" type="button" class="file-button" hidden>Hapus pratinjau & ambil ulang</button>
           </div>
-          <form id="upload-form" class="upload-card">
-            <div class="form-heading"><span class="eyebrow">SENTUHAN TERAKHIR</span><h3>Beri momenmu <em>cerita.</em></h3><p id="form-hint">Ambil momen terlebih dahulu, lalu lengkapi bagian ini.</p></div>
-            <label for="guest-name">Momen dari siapa?</label>
-            <input id="guest-name" maxlength="80" placeholder="Nama kamu" autocomplete="name" required>
-            <label for="caption">Cerita kecilnya <span>opsional</span></label>
-            <textarea id="caption" rows="3" maxlength="300" placeholder="Momen ini bikin aku tersenyum karena…"></textarea>
-            <div class="file-info" id="file-info">◎ Belum ada momen diambil.</div>
-            <button id="upload" type="submit" class="solid full" disabled>Bagikan ke album <span aria-hidden="true">↗</span></button>
-            <div class="upload-feedback"><progress id="progress" max="100" value="0" hidden aria-label="Progres unggahan"></progress><p id="upload-state" role="status" hidden></p><button id="cancel-upload" type="button" class="file-button" hidden>Batalkan unggahan</button></div>
-            <p class="small upload-note">Maks. 100 MB per momen. Bagikan kenangan yang berkenan dilihat bersama.</p>
-          </form>
+          <input id="native-video" type="file" accept="video/*" capture="environment" hidden aria-label="Rekam video dengan kamera HP">
         </div>
       </section>
-      <section id="gallery" aria-labelledby="gallery-title" hidden>
-        <div class="section-title"><div><span class="eyebrow">DARI SEMUA YANG HADIR</span><h2 id="gallery-title">A roll of <em>good times.</em></h2></div><p id="gallery-description">Banyak sudut pandang.<br> Satu hari yang istimewa.</p></div>
-        <div class="gallery-toolbar"><select id="media-type" aria-label="Tampilkan jenis momen"><option value="all">Semua momen</option><option value="photo">Foto saja</option><option value="video">Video saja</option></select><button id="refresh" class="outline">Perbarui ↻</button></div>
-        <div id="locked" class="locked" hidden><span class="gate-icon" aria-hidden="true">✧</span><span class="eyebrow">KENANGAN SEDANG DIKUMPULKAN</span><h3>Good things<br><em>are worth the wait.</em></h3><p id="release-copy"></p><p>Kamu tetap bisa berbagi momen sekarang.<br>Galeri akan terbuka saat waktunya tiba.</p><button id="share-first" class="solid">Ambil momen ◎</button></div>
-        <div id="gallery-loading" class="album-loading gallery-loading" role="status" hidden><span class="album-spinner" aria-hidden="true"></span><span>Memuat momen…</span></div>
+      <section id="gallery" class="gallery-page-content" aria-labelledby="gallery-title" hidden>
+        <header class="gallery-header"><span class="eyebrow">#foREVArwithCESAR</span><h1 id="gallery-title">Our shared <em>moments.</em></h1><p>Hari kita. Lewat matamu.</p></header>
+        <div class="gallery-toolbar"><select id="media-type" aria-label="Tampilkan jenis momen"><option value="all">Semua momen</option><option value="photo">Foto saja</option><option value="video">Video saja</option></select><button id="refresh" class="icon-button reload-button" type="button" aria-label="Perbarui album" title="Perbarui album"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.5-1L20 9M4 15l2.4 3A7 7 0 0 0 18 17"/></svg></button></div>
+        <div id="locked" class="locked" hidden><h2>Kenangan sedang<br><em>dikumpulkan.</em></h2><p id="release-copy"></p><p>Kamu tetap bisa berbagi momen sekarang.</p><button id="share-first" class="solid" type="button">Ambil momen</button></div>
+        <div id="gallery-loading" class="album-loading" role="status" hidden><span class="album-spinner" aria-hidden="true"></span><span>Memuat momen…</span></div>
         <div id="grid" class="moment-grid" aria-busy="false"></div>
-        <div id="gallery-empty" class="empty" hidden><span aria-hidden="true">♡</span><h3>Roll pertama masih menanti.</h3><p>Jadilah yang pertama mengabadikan cerita.</p><button id="share-empty" class="solid">Bagikan momen pertama ↗</button></div>
-        <button id="more" class="outline full" hidden>Lihat lebih banyak ↓</button>
+        <div id="gallery-empty" class="empty" hidden><h2>Roll pertama<br>masih menanti.</h2><p>Jadilah yang pertama mengabadikan cerita.</p><button id="share-empty" class="solid" type="button">Bagikan momen pertama</button></div>
+        <button id="more" class="outline full" type="button" hidden>Lihat lebih banyak ↓</button>
+        <footer>Made by Cesar with love</footer>
       </section>
-    </div>
-  </main>
-  <footer><span class="footer-monogram">R <i>&</i> C</span><p>Collected with joy.<br><span>Made by Cesar with love</span></p><span class="footer-date">21 / 11 / 2026</span></footer>
+      <nav id="album-nav" class="tabs" aria-label="Navigasi album" hidden>
+        <button id="tab-capture" type="button" class="selected" aria-pressed="true" aria-controls="capture"><span class="nav-icon" aria-hidden="true">◎</span><span>Bagikan momen</span></button>
+        <button id="tab-gallery" type="button" aria-pressed="false" aria-controls="gallery"><span class="nav-icon" aria-hidden="true">▦</span><span>Lihat album</span><span id="count" class="count">0</span></button>
+      </nav>
+    </main>
   </div>
-  <dialog id="moment-dialog" aria-label="Detail momen"><button id="close-dialog" class="dialog-close" aria-label="Tutup momen">✕</button><div id="moment-detail"></div></dialog>
-  <noscript><p>Aktifkan JavaScript untuk membuka album dan kamera.</p></noscript>
+  <dialog id="caption-dialog" aria-labelledby="caption-title"><button id="close-caption" class="icon-button dialog-close" type="button" aria-label="Tutup pesan"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    <form id="upload-form" class="upload-card"><span class="eyebrow">SATU MOMEN, SATU CERITA</span><h2 id="caption-title">Ada cerita<br><em>di baliknya?</em></h2><p id="form-hint">Pesan bersifat opsional. Kamu juga bisa langsung membagikan foto ini.</p>
+      <label for="caption">Pesan <span>opsional</span></label><textarea id="caption" rows="3" maxlength="300" placeholder="Momen ini bikin aku tersenyum karena…"></textarea>
+      <div id="file-info" hidden></div><button id="upload" type="submit" class="solid full" disabled>Bagikan ke album <span aria-hidden="true">↗</span></button>
+      <div class="upload-feedback"><progress id="progress" max="100" value="0" hidden aria-label="Progres unggahan"></progress><p id="upload-state" role="status" hidden></p><button id="cancel-upload" type="button" class="text-button" hidden>Batalkan unggahan</button></div>
+      <button id="discard" type="button" class="text-button full" hidden>Ambil ulang</button>
+    </form>
+  </dialog>
+  <dialog id="moment-dialog" aria-label="Detail momen"><button id="close-dialog" class="icon-button dialog-close" type="button" aria-label="Tutup momen"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button><div id="moment-detail"></div></dialog>
 </body>
 </html>

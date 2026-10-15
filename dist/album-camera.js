@@ -3,13 +3,23 @@ window.TemuAlbumCamera=(()=>{
   const el=id=>document.getElementById(id);
   let stream,recorder,timer,version=0,mode='photo',facing='environment',receive,changed=()=>{},discard=false,active=false;
   function stop(){version++;clearInterval(timer);if(recorder&&recorder.state!=='inactive'){discard=true;recorder.stop();}stream?.getTracks().forEach(t=>t.stop());stream=null;el('camera-live').srcObject=null;}
+  function frame(){
+    const video=el('camera-live'),width=video.videoWidth||1440,height=video.videoHeight||1920;
+    const ratio=mode==='video'?width/height:window.matchMedia('(orientation: landscape)').matches?4/3:3/4;
+    const w=Math.min(width,height*ratio),h=w/ratio;
+    return {x:(width-w)/2,y:(height-h)/2,width:w,height:h};
+  }
+  function layout(){
+    const box=el('camera-stage').getBoundingClientRect(),photo=el('photo-preview'),video=el('video-preview');
+    const ratio=active?frame().width/frame().height:!photo.hidden&&photo.naturalWidth?photo.naturalWidth/photo.naturalHeight:!video.hidden&&video.videoWidth?video.videoWidth/video.videoHeight:window.matchMedia('(orientation: landscape)').matches?4/3:3/4;
+    const view=el('viewfinder');view.style.aspectRatio=String(ratio);
+    if(box.width&&box.height){const width=Math.min(box.width,box.height*ratio);view.style.width=width+'px';view.style.height=width/ratio+'px';}
+  }
   function close(){
     active=false;stop();el('camera-status').textContent='';el('camera-live').hidden=true;el('camera-controls').hidden=true;el('camera-actions').hidden=false;
     const photo=!!el('photo-preview').getAttribute('src'),video=!!el('video-preview').getAttribute('src');
     el('photo-preview').hidden=!photo;el('video-preview').hidden=!video;el('placeholder').hidden=photo||video;
-    const preview=photo?el('photo-preview'):video?el('video-preview'):null;
-    el('viewfinder').style.aspectRatio=preview?(photo?preview.naturalWidth+'/'+preview.naturalHeight:preview.videoWidth+'/'+preview.videoHeight):'';
-    el('photo-overlay').hidden=true;changed();
+    el('photo-overlay').hidden=true;layout();changed();
   }
   function errorText(e){return e.name==='NotAllowedError'?'Akses kamera ditolak. Izinkan kamera di pengaturan browser, lalu coba lagi.':e.name==='NotFoundError'?'Kamera tidak ditemukan pada perangkat ini.':'Kamera belum tersedia. Tutup aplikasi lain yang memakai kamera, lalu coba lagi.';}
   async function start(){
@@ -17,17 +27,17 @@ window.TemuAlbumCamera=(()=>{
     try{
       if(!navigator.mediaDevices?.getUserMedia)throw Error('Kamera langsung memerlukan HTTPS dan browser yang mendukung kamera. Buka tautan di Safari atau Chrome.');
       if(mode==='video'&&!window.MediaRecorder)throw Error('Rekam video belum didukung browser ini. Gunakan foto atau buka Safari/Chrome terbaru.');
-      const next=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:facing},width:{ideal:mode==='photo'?1440:1280},height:{ideal:mode==='photo'?1920:720}},audio:mode==='video'});
+      const next=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:facing},width:{ideal:mode==='photo'?(window.matchMedia('(orientation: landscape)').matches?1920:1440):1280},height:{ideal:mode==='photo'?(window.matchMedia('(orientation: landscape)').matches?1440:1920):720}},audio:mode==='video'});
       if(current!==version||!active){next.getTracks().forEach(t=>t.stop());return;}
       stream=next;el('camera-live').srcObject=stream;await el('camera-live').play();
       if(current!==version)return;
-      el('camera-shutter').setAttribute('aria-label',mode==='photo'?'Ambil foto':'Mulai rekam video');el('camera-shutter').classList.remove('recording');el('camera-shutter').disabled=false;el('camera-switch').disabled=false;el('camera-status').textContent=mode==='photo'?'Bingkai momenmu, lalu tekan tombol bulat untuk memotret.':'Rekam hingga 60 detik. Tekan selesai untuk menyimpan pratinjau.';el('viewfinder').style.aspectRatio=el('camera-live').videoWidth+'/'+el('camera-live').videoHeight;changed();
+      el('camera-shutter').setAttribute('aria-label',mode==='photo'?'Ambil foto':'Mulai rekam video');el('camera-shutter').classList.remove('recording');el('camera-shutter').disabled=false;el('camera-switch').disabled=false;el('camera-status').textContent=mode==='photo'?'Bingkai momenmu, lalu tekan tombol bulat untuk memotret.':'Rekam hingga 60 detik. Tekan selesai untuk menyimpan pratinjau.';layout();changed();
     }catch(e){if(current!==version)return;close();el('camera-status').textContent=e.name==='Error'?e.message:errorText(e);}
   }
   async function snap(){
     const video=el('camera-live');if(!video.videoWidth)return;
     el('camera-shutter').disabled=true;
-    const current=version,canvas=document.createElement('canvas');canvas.width=video.videoWidth;canvas.height=video.videoHeight;canvas.getContext('2d').drawImage(video,0,0);
+    const current=version,box=frame(),canvas=document.createElement('canvas');canvas.width=Math.round(box.width);canvas.height=Math.round(box.height);canvas.getContext('2d').drawImage(video,box.x,box.y,box.width,box.height,0,0,canvas.width,canvas.height);
     const blob=await new Promise(r=>canvas.toBlob(r,'image/jpeg',.98));
     if(current!==version||!active)return;
     if(!blob){el('camera-status').textContent='Foto belum berhasil diambil. Coba lagi.';el('camera-shutter').disabled=false;return;}
@@ -50,16 +60,16 @@ window.TemuAlbumCamera=(()=>{
   el('camera-shutter').onclick=()=>mode==='photo'?snap():record();
   el('camera-switch').onclick=()=>{facing=facing==='environment'?'user':'environment';start();};
   el('close-camera').onclick=close;
-  document.addEventListener('visibilitychange',()=>{if(document.hidden&&active)close();});window.addEventListener('pagehide',close);
+  document.addEventListener('visibilitychange',()=>{if(document.hidden&&active)close();});window.addEventListener('pagehide',close);window.addEventListener('resize',()=>{layout();changed();});el('camera-live').addEventListener('resize',()=>{layout();changed();});
   function nativeCamera(){return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent||'')||navigator.userAgentData?.mobile===true||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);}
   const input=el('native-video');
   input.onchange=()=>{const captured=input.files?.[0];if(captured)receive?.(captured);input.value='';};
-  return {close,get mode(){return mode;},isActive:()=>active,open(kind,onCapture,onState=()=>{}){
+  return {close,layout,frame,get mode(){return mode;},isActive:()=>active,open(kind,onCapture,onState=()=>{}){
     close();mode=kind;receive=onCapture;changed=onState;
     // Keep the phone's native recorder for video; photos use the inline studio.
     if(kind==='video'&&nativeCamera()){input.value='';input.click();return;}
     active=true;el('camera-controls').hidden=false;el('camera-actions').hidden=true;el('camera-live').hidden=false;
     for(const id of ['placeholder','photo-preview','video-preview','photo-overlay'])el(id).hidden=true;
-    el('video-preview').pause();el('viewfinder').style.aspectRatio='';changed();start();
+    el('video-preview').pause();layout();changed();start();
   }};
 })();
