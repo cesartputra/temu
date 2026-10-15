@@ -2,15 +2,15 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),vm=requir
 const source=fs.readFileSync('dist/album.js','utf8');
 const tick=()=>new Promise(setImmediate);
 function harness(){
- const nodes={},revoked=[],requests=[],prepared=[];
- const make=()=>({hidden:false,disabled:false,value:'',textContent:'',style:{},attributes:{},childElementCount:0,classList:{toggle(){}},setAttribute(k,v){this.attributes[k]=v;},removeAttribute(k){delete this[k];},pause(){this.paused=true;},scrollIntoView(){},addEventListener(){},querySelectorAll(){return [];}});
- const document={hidden:false,querySelector:s=>nodes[s]??=make(),querySelectorAll:s=>s==='[data-filter]'?['original','film','warm','mono','dazz'].map(p=>{const n=nodes[p]??=make();n.dataset={filter:p};return n;}):[]};
+ const nodes={},revoked=[],requests=[],prepared=[],timers=[];
+ const make=()=>({hidden:false,disabled:false,value:'',textContent:'',style:{},attributes:{},childElementCount:0,classList:{toggle(){},add(){},remove(){}},focus(){this.focused=true;},showModal(){this.open=true;},getAttribute(k){return this[k]??null;},setAttribute(k,v){this.attributes[k]=v;},removeAttribute(k){delete this[k];},pause(){this.paused=true;},scrollIntoView(){},addEventListener(){},querySelectorAll(){return [];}});
+ const document={body:make(),hidden:false,querySelector:s=>nodes[s]??=make(),querySelectorAll:s=>s==='[data-filter]'?['original','film','warm','mono','dazz'].map(p=>{const n=nodes[p]??=make();n.dataset={filter:p};return n;}):[]};
  class XHR{constructor(){this.upload={};requests.push(this);}open(method,url){this.url=url;}setRequestHeader(k,v){(this.headers??={})[k]=v;}send(f){this.sent=f;}abort(){this.onabort();}}
  document.querySelector('#guest-name');
  const config={title:'Reva & Cesar',count:0,uploadsOpen:true,revealed:true,filter:'film'};
- const context={TemuAlbumLoading:require('../dist/album-loading.js'),document,window:{addEventListener(){}},location:{hash:'',pathname:'/album'},history:{replaceState(){}},fetch:async()=>({ok:true,json:async()=>config}),URL:{createObjectURL:()=> 'blob:moment',revokeObjectURL:u=>revoked.push(u)},URLSearchParams,XMLHttpRequest:XHR,TemuAlbumCamera:{open(){}},TemuAlbumPhoto:{overlay:async()=>({src:'/art.png',naturalWidth:3,naturalHeight:1}),placement:()=>({x:0,y:700,width:1000,height:300}),prepare:async(f,filter,overlay,effect)=>{const result={name:'decorated.jpg',type:'image/jpeg',size:2000};prepared.push({f,filter,overlay,effect,result});return result;}},TemuAlbumUpload:require('../dist/album-upload.js'),crypto:require('node:crypto').webcrypto,AbortController,sessionStorage:{getItem(){return null},setItem(){},removeItem(){}},setInterval(){},Date,AbortSignal};
+ const context={TemuAlbumLoading:require('../dist/album-loading.js'),document,window:{matchMedia(){return {matches:false};},addEventListener(){}},setTimeout(fn,ms){timers.push({fn,ms});},location:{hash:'',pathname:'/album'},history:{replaceState(){}},fetch:async()=>({ok:true,json:async()=>config}),URL:{createObjectURL:()=> 'blob:moment',revokeObjectURL:u=>revoked.push(u)},URLSearchParams,XMLHttpRequest:XHR,TemuAlbumCamera:{isActive:()=>false,close(){},open(){}},TemuAlbumPhoto:{overlay:async style=>style==='none'?null:({src:'/art.png',naturalWidth:3,naturalHeight:1}),placement:()=>({x:0,y:700,width:1000,height:300}),prepare:async(f,filter,overlay,effect)=>{const result={name:'decorated.jpg',type:'image/jpeg',size:2000};prepared.push({f,filter,overlay,effect,result});return result;}},TemuAlbumUpload:require('../dist/album-upload.js'),crypto:require('node:crypto').webcrypto,AbortController,sessionStorage:{getItem(){return null},setItem(){},removeItem(){}},setInterval(){},Date,AbortSignal};
  vm.runInNewContext(source,context);
- return {nodes,revoked,requests,prepared,context,run:s=>vm.runInNewContext(s,context),config};
+ return {nodes,revoked,requests,prepared,timers,context,run:s=>vm.runInNewContext(s,context),config};
 }
 test('discarding a preview stops playback, frees its URL and preserves guest details',async()=>{
  const h=harness();await tick();h.nodes['#guest-name'].value='Bayu';await h.run('selectFile({name:"camera.jpg",type:"image/jpeg",size:1024})');h.nodes['#discard'].onclick();
@@ -35,7 +35,7 @@ test('oversized or unsupported camera result does not replace valid preview',asy
 });
 test('gallery escapes guest text and preserves multiline caption',async()=>{
  const h=harness();await tick();h.nodes['#media-type'].value='all';h.run('items=[{id:"a",name:"<img onerror=alert(1)>",caption:"first\\nsecond <script>",mime:"image/jpeg",filter:"film",created:"2026-11-21T12:00:00Z"}];next=null;renderGallery()');
- assert.ok(h.nodes['#grid'].innerHTML.includes('&lt;img onerror=alert(1)&gt;'));assert.ok(h.nodes['#grid'].innerHTML.includes('first\nsecond &lt;script&gt;'));assert.equal(h.nodes['#more'].hidden,true);
+ assert.ok(h.nodes['#grid'].innerHTML.includes('&lt;img onerror=alert(1)&gt;'));assert.doesNotMatch(h.nodes['#grid'].innerHTML,/moment-meta|<script>/);assert.equal(h.nodes['#more'].hidden,true);
 });
 
 test('photo upload sends decorated bytes and avoids applying the chosen filter a second time',async()=>{
@@ -86,4 +86,38 @@ test('album and gallery request loaders stop after success or connection failure
  const gallery=h.run('loadGallery(true)');assert.equal(h.nodes['#gallery-loading'].hidden,false);assert.equal(h.nodes['#grid'].attributes['aria-busy'],'true');
  finish({ok:false,status:503,json:async()=>({error:'Album sementara tidak tersedia.'})});await gallery;
  assert.equal(h.nodes['#gallery-loading'].hidden,true);assert.equal(h.nodes['#grid'].attributes['aria-busy'],'false');assert.equal(h.nodes['#refresh'].disabled,false);assert.equal(h.run('items[0].id'),'existing');assert.equal(h.run('next'),25);
+});
+
+test('envelope opens once, then enables the page and moves focus without requesting camera access',async()=>{
+ const h=harness();await tick();h.context.document.querySelector('#album-app').inert=true;
+ h.context.TemuAlbumCamera.open=()=>assert.fail('Opening the album must not request the camera');
+ h.nodes['#open-cover'].onclick();h.nodes['#open-cover'].onclick();assert.equal(h.timers.length,1);assert.equal(h.nodes['#album-app'].inert,true);
+ h.timers[0].fn();assert.equal(h.nodes['#album-cover'].hidden,true);assert.equal(h.nodes['#album-app'].inert,false);assert.equal(h.nodes['#capture-title'].focused,true);
+});
+test('reduced motion skips the envelope animation delay',async()=>{
+ const h=harness();await tick();h.context.window.matchMedia=()=>({matches:true});h.nodes['#open-cover'].onclick();assert.equal(h.timers[0].ms,0);
+});
+test('feed is photo-only tiles with details available on tap, including untrusted captions',async()=>{
+ const h=harness();await tick();h.nodes['#media-type'].value='all';
+ h.run('items=[{id:"a",name:"Guest <hello>",caption:"Line1\\nLine2 <script>",mime:"image/jpeg",filter:"original",created:"2026-11-21T12:00:00Z",thumbnail:false}];next=null;renderGallery()');
+ assert.match(h.nodes['#grid'].innerHTML,/data-photo-src/);assert.doesNotMatch(h.nodes['#grid'].innerHTML,/moment-meta/);
+ h.nodes['#grid'].onclick({target:{closest(){return {dataset:{id:'a'}};}}});
+ assert.match(h.nodes['#moment-detail'].innerHTML,/Guest &lt;hello&gt;/);assert.match(h.nodes['#moment-detail'].innerHTML,/Line1\nLine2 &lt;script&gt;/);assert.match(h.nodes['#moment-detail'].innerHTML,/21 November 2026/);assert.match(h.nodes['#moment-detail'].innerHTML,/Unduh file/);
+});
+test('frame preview tracks the inline live camera and upload stays disabled until capture',async()=>{
+ const h=harness();await tick();h.context.TemuAlbumCamera.isActive=()=>true;h.context.TemuAlbumCamera.mode='photo';h.nodes['#camera-live'].videoWidth=1080;h.nodes['#camera-live'].videoHeight=1440;
+ await h.run("chooseOverlay('monogram')");assert.equal(h.nodes['#photo-overlay'].hidden,false);assert.equal(h.nodes['#upload'].disabled,true);
+ await h.run("chooseOverlay('none')");assert.equal(h.nodes['#photo-overlay'].hidden,true);
+});
+
+test('inline camera capture hands its new photo to the album without dropping it during close',async()=>{
+ const h=harness();await tick();let stopped=false;
+ const d=h.context.document;d.getElementById=id=>d.querySelector('#'+id);d.addEventListener=()=>{};
+ d.createElement=()=>({getContext:()=>({drawImage(){}}),toBlob(fn){fn(new Blob(['camera frame'],{type:'image/jpeg'}));}});
+ h.context.navigator={mediaDevices:{getUserMedia:async()=>({getTracks:()=>[{stop(){stopped=true;}}]})}};
+ h.context.clearInterval=()=>{};h.context.Blob=Blob;h.context.File=class extends Blob{constructor(parts,name,opts){super(parts,opts);this.name=name;}};
+ const live=h.nodes['#camera-live'];live.videoWidth=900;live.videoHeight=1200;live.readyState=2;live.play=async()=>{};
+ h.run(fs.readFileSync('dist/album-camera.js','utf8'));h.context.TemuAlbumCamera=h.context.window.TemuAlbumCamera;
+ h.nodes['#take-photo'].onclick();await tick();assert.equal(h.context.TemuAlbumCamera.isActive(),true);assert.equal(h.nodes['#camera-shutter'].disabled,false);
+ await h.nodes['#camera-shutter'].onclick();await tick();assert.equal(stopped,true);assert.equal(h.run('file.type'),'image/jpeg');assert.equal(h.nodes['#photo-preview'].hidden,false);assert.equal(h.nodes['#upload'].disabled,false);
 });
