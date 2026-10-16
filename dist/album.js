@@ -12,7 +12,7 @@ function captureState(){
  for(const id of ['edit-name','tab-capture','tab-gallery'])$('#'+id).disabled=recording;
  for(const [id,kind] of [['take-photo','photo'],['take-video','video']])$('#'+id).setAttribute('aria-pressed',String(camera&&TemuAlbumCamera.mode===kind));
  $('#discard').hidden=!file;$('#discard').disabled=busy;$('#close-caption').disabled=busy;
- $('#review-capture').hidden=!file||camera;$('#review-capture').disabled=busy;
+ $('#capture-review').hidden=$('#review-capture').hidden=!file||camera;$('#review-capture').disabled=$('#retake-capture').disabled=busy;
  for(const selector of ['[data-filter]','[data-overlay]'])for(const button of document.querySelectorAll(selector))button.disabled=busy||recording;
  $('#overlay-fieldset').hidden=camera?TemuAlbumCamera.mode==='video':!!file&&!file.type.startsWith('image/');
  $('#preview-label').hidden=!file||camera;
@@ -79,7 +79,7 @@ async function chooseOverlay(value){
 }
 $('#overlays').onclick=e=>{const button=e.target.closest('[data-overlay]');if(button)chooseOverlay(button.dataset.overlay);};
 function clearPreview(){file=null;$('#photo-preview').hidden=$('#video-preview').hidden=$('#photo-overlay').hidden=true;$('#photo-preview').onload=null;$('#viewfinder').style.aspectRatio='';$('#video-preview').pause();for(const el of [$('#photo-preview'),$('#video-preview')])el.removeAttribute('src');$('#placeholder').hidden=false;$('#file-info').textContent='◎ Belum ada momen diambil.';if(previewURL)URL.revokeObjectURL(previewURL);previewURL=null;captureState();}
-$('#discard').onclick=()=>{if(xhr||preparing)return;$('#caption-dialog').close();$('#upload-state').hidden=true;TemuAlbumCamera.open(file?.type.startsWith('video/')?'video':'photo',selectFile,cameraChanged);};
+$('#retake-capture').onclick=$('#discard').onclick=()=>{if(xhr||preparing)return;$('#caption-dialog').close();$('#upload-state').hidden=true;TemuAlbumCamera.open(file?.type.startsWith('video/')?'video':'photo',selectFile,cameraChanged);};
 $('#close-caption').onclick=()=>$('#caption-dialog').close();$('#caption-dialog').addEventListener('cancel',event=>{if(xhr||preparing)event.preventDefault();});$('#review-capture').onclick=()=>{if(file&&!xhr&&!preparing)$('#caption-dialog').showModal();};
 function cameraChanged(){captureState();renderOverlay(previewArt,overlayStyle,file);}
 $('#take-photo').onclick=()=>{if(!TemuAlbumCamera.isActive()||TemuAlbumCamera.mode!=='photo')TemuAlbumCamera.open('photo',selectFile,cameraChanged);};

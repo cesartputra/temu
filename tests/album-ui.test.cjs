@@ -168,3 +168,17 @@ test('shared navigation sits in the top header alongside name, with no bottom na
  for(const id of ['edit-name','album-nav','tab-capture','tab-gallery'])assert.ok(header.includes('id="'+id+'"'));
  assert.doesNotMatch(css,/nav-height/);assert.match(css,/\.studio-header\{[^}]*top:0/);
 });
+
+test('retake next to share preserves the previous photo and is hidden during live capture',async()=>{
+ const h=harness();await tick();await h.run('selectFile({name:"photo.jpg",type:"image/jpeg",size:1024})');h.nodes['#close-caption'].onclick();
+ assert.equal(h.nodes['#capture-review'].hidden,false);assert.equal(h.nodes['#retake-capture'].disabled,false);
+ let kind;h.context.TemuAlbumCamera.open=value=>kind=value;h.nodes['#retake-capture'].onclick();assert.equal(kind,'photo');assert.equal(h.run('file.name'),'photo.jpg');assert.equal(h.revoked.length,0);
+ h.context.TemuAlbumCamera.isActive=()=>true;h.run('captureState()');assert.equal(h.nodes['#capture-review'].hidden,true);
+ const html=fs.readFileSync('dist/album.html','utf8');assert.match(html,/<div id="capture-review"[^>]*><button id="retake-capture"[\s\S]*?<button id="review-capture"/);
+});
+test('preparing or uploading locks the new retake button as well as share',async()=>{
+ const h=harness();await tick();h.nodes['#guest-name'].value='Bayu';await h.run('selectFile({name:"clip.mp4",type:"video/mp4",size:1024})');
+ await h.nodes['#upload-form'].onsubmit({preventDefault(){}});assert.equal(h.nodes['#retake-capture'].disabled,true);
+ h.context.TemuAlbumCamera.open=()=>assert.fail('Cannot retake during upload');h.nodes['#retake-capture'].onclick();assert.equal(h.run('file.name'),'clip.mp4');
+ h.nodes['#cancel-upload'].onclick();assert.equal(h.nodes['#retake-capture'].disabled,false);
+});
