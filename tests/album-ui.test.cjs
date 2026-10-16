@@ -122,7 +122,7 @@ test('frame preview tracks the inline live camera and upload stays disabled unti
 test('inline camera capture hands its new photo to the album without dropping it during close',async()=>{
  const h=harness();await tick();let stopped=false;
  const d=h.context.document;d.getElementById=id=>d.querySelector('#'+id);d.addEventListener=()=>{};
- d.createElement=()=>({getContext:()=>({fillRect(){},drawImage(){}}),toBlob(fn){fn(new Blob(['camera frame'],{type:'image/jpeg'}));}});
+ d.createElement=()=>({getContext:()=>({drawImage(){}}),toBlob(fn){fn(new Blob(['camera frame'],{type:'image/jpeg'}));}});
  h.context.navigator={mediaDevices:{getUserMedia:async()=>({getTracks:()=>[{stop(){stopped=true;}}]})}};
  h.context.clearInterval=()=>{};h.context.Blob=Blob;h.context.File=class extends Blob{constructor(parts,name,opts){super(parts,opts);this.name=name;}};
  const live=h.nodes['#camera-live'];live.videoWidth=900;live.videoHeight=1200;live.readyState=2;live.play=async()=>{};
