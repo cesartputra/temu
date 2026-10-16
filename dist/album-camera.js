@@ -1,19 +1,18 @@
 'use strict';
 window.TemuAlbumCamera=(()=>{
   const el=id=>document.getElementById(id);
-  let stream,recorder,timer,paintTimer,croppedStream,recordRatio,version=0,mode='photo',facing='environment',receive,changed=()=>{},discard=false,active=false;
-  function stopCrop(){clearInterval(paintTimer);croppedStream?.getVideoTracks().forEach(t=>t.stop());croppedStream=null;recordRatio=null;}
+  let stream,recorder,timer,paintTimer,croppedStream,version=0,mode='photo',facing='environment',receive,changed=()=>{},discard=false,active=false;
+  function stopCrop(){clearInterval(paintTimer);croppedStream?.getVideoTracks().forEach(t=>t.stop());croppedStream=null;}
   function stop(){version++;clearInterval(timer);if(recorder&&recorder.state!=='inactive'){discard=true;recorder.stop();}stopCrop();stream?.getTracks().forEach(t=>t.stop());stream=null;el('camera-live').srcObject=null;}
   function frame(){
     const video=el('camera-live'),width=video.videoWidth||1440,height=video.videoHeight||1920;
-    const landscape=window.matchMedia('(orientation: landscape)').matches;
-    const ratio=mode==='video'?(recordRatio||(landscape?16/9:9/16)):(landscape?4/3:3/4);
+    const ratio=9/16;
     const w=Math.min(width,height*ratio),h=w/ratio;
     return {x:(width-w)/2,y:(height-h)/2,width:w,height:h};
   }
   function layout(){
     const box=el('camera-stage').getBoundingClientRect(),photo=el('photo-preview'),video=el('video-preview');
-    const ratio=active?frame().width/frame().height:!photo.hidden&&photo.naturalWidth?photo.naturalWidth/photo.naturalHeight:!video.hidden&&video.videoWidth?video.videoWidth/video.videoHeight:window.matchMedia('(orientation: landscape)').matches?4/3:3/4;
+    const ratio=active?frame().width/frame().height:!photo.hidden&&photo.naturalWidth?photo.naturalWidth/photo.naturalHeight:!video.hidden&&video.videoWidth?video.videoWidth/video.videoHeight:9/16;
     const view=el('viewfinder');view.style.aspectRatio=String(ratio);
     if(box.width&&box.height){const width=Math.min(box.width,box.height*ratio);view.style.width=width+'px';view.style.height=width/ratio+'px';}
   }
@@ -29,8 +28,8 @@ window.TemuAlbumCamera=(()=>{
     try{
       if(!navigator.mediaDevices?.getUserMedia)throw Error('Kamera langsung memerlukan HTTPS dan browser yang mendukung kamera. Buka tautan di Safari atau Chrome.');
       if(mode==='video'&&!window.MediaRecorder)throw Error('Rekam video belum didukung browser ini. Gunakan foto atau buka Safari/Chrome terbaru.');
-      const landscape=window.matchMedia('(orientation: landscape)').matches,wide=mode==='photo'?1920:1280,short=mode==='photo'?1440:720;
-      const next=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:facing},width:{ideal:landscape?wide:short},height:{ideal:landscape?short:wide},aspectRatio:{ideal:landscape?wide/short:short/wide}},audio:mode==='video'});
+      const height=mode==='photo'?1920:1280,width=height*9/16;
+      const next=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:facing},width:{ideal:width},height:{ideal:height},aspectRatio:{ideal:9/16}},audio:mode==='video'});
       if(current!==version||!active){next.getTracks().forEach(t=>t.stop());return;}
       stream=next;el('camera-live').srcObject=stream;await el('camera-live').play();
       if(current!==version)return;
@@ -40,7 +39,7 @@ window.TemuAlbumCamera=(()=>{
   async function snap(){
     const video=el('camera-live');if(!video.videoWidth)return;
     el('camera-shutter').disabled=true;
-    const current=version,box=frame(),canvas=document.createElement('canvas');canvas.width=Math.round(box.width);canvas.height=Math.round(box.height);canvas.getContext('2d').drawImage(video,box.x,box.y,box.width,box.height,0,0,canvas.width,canvas.height);
+    const current=version,box=frame(),canvas=document.createElement('canvas'),unit=Math.max(1,Math.floor(Math.min(box.width/9,box.height/16)));canvas.width=unit*9;canvas.height=unit*16;canvas.getContext('2d').drawImage(video,box.x,box.y,box.width,box.height,0,0,canvas.width,canvas.height);
     const blob=await new Promise(r=>canvas.toBlob(r,'image/jpeg',.98));
     if(current!==version||!active)return;
     if(!blob){el('camera-status').textContent='Foto belum berhasil diambil. Coba lagi.';el('camera-shutter').disabled=false;return;}
@@ -52,11 +51,11 @@ window.TemuAlbumCamera=(()=>{
       const mime=['video/mp4;codecs=avc1.42E01E,mp4a.40.2','video/mp4','video/webm;codecs=vp8,opus','video/webm'].find(x=>MediaRecorder.isTypeSupported(x));
       if(!mime)throw Error('Format rekam video belum didukung. Ambil foto atau gunakan browser lain.');
       const chunks=[];let bytes=0,seconds=0;const current=version;discard=false;
-      const video=el('camera-live'),box=frame();recordRatio=box.width/box.height;let input=stream;
+      const video=el('camera-live'),box=frame();let input=stream;
       // Some phone cameras ignore portrait constraints; record the same crop shown in the preview.
-      if(Math.abs(video.videoWidth/video.videoHeight-recordRatio)>.01){
-        const canvas=document.createElement('canvas'),scale=Math.min(1,1280/Math.max(box.width,box.height));
-        canvas.width=Math.max(2,Math.floor(box.width*scale/2)*2);canvas.height=Math.max(2,Math.floor(canvas.width/recordRatio/2)*2);
+      if(video.videoWidth*16!==video.videoHeight*9){
+        const canvas=document.createElement('canvas'),unit=Math.max(1,Math.floor(Math.min(box.width/18,box.height/32,40)));
+        canvas.width=unit*18;canvas.height=unit*32;
         if(!canvas.captureStream)throw Error('Browser belum mendukung rekaman sesuai bingkai. Buka Safari atau Chrome terbaru.');
         const context=canvas.getContext('2d'),draw=()=>{const crop=frame();context.drawImage(video,crop.x,crop.y,crop.width,crop.height,0,0,canvas.width,canvas.height);};
         draw();croppedStream=canvas.captureStream(30);for(const track of stream.getAudioTracks())croppedStream.addTrack(track);

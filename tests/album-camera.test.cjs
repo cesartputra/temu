@@ -54,7 +54,7 @@ test('Android, iPhone and iPad record inline with audio and portrait constraints
 test('inline recording stops at 60 seconds and notifies the album when recording starts and stops',async()=>{
  const h=harness();let changes=0;h.rotate(true);h.api.open('video',f=>h.captures.push(f),()=>changes++);await tick();const before=changes;
  h.nodes['camera-shutter'].onclick();assert.equal(changes,before+1);
- for(let second=0;second<60;second++)h.intervals[0]();
+ for(let second=0;second<60;second++)h.intervals.at(-1)();
  assert.equal(h.captures.length,1);assert.equal(h.api.isActive(),false);assert.equal(h.api.isRecording(),false);assert.ok(changes>before+1);
 });
 test('unsupported video recording gives guidance and does not open a native camera',async()=>{
@@ -62,12 +62,12 @@ test('unsupported video recording gives guidance and does not open a native came
  h.api.open('video',()=>assert.fail('No capture'));await tick();assert.equal(h.api.isActive(),false);assert.match(h.nodes['camera-status'].textContent,/belum didukung/);
 });
 
-test('portrait and landscape preview crops match the photo capture and fit the stage',async()=>{
+test('photo preview and capture stay 9:16 in both phone orientations and fit the stage',async()=>{
  const h=harness();h.api.open('photo',f=>h.captures.push(f));await tick();
- assert.equal(h.api.frame().width/h.api.frame().height,3/4);assert.equal(h.nodes['viewfinder'].style.width,'360px');assert.equal(h.nodes['viewfinder'].style.height,'480px');
- await h.nodes['camera-shutter'].onclick();assert.equal(h.canvases[0][0]/h.canvases[0][1],3/4);assert.equal(h.draws[0].length,9);
- h.api.open('photo',f=>h.captures.push(f));await tick();h.rotate(true);assert.equal(h.api.frame().width/h.api.frame().height,4/3);
- await h.nodes['camera-shutter'].onclick();assert.equal(h.canvases[1][0]/h.canvases[1][1],4/3);assert.equal(h.captures.length,2);
+ assert.equal(h.api.frame().width/h.api.frame().height,9/16);assert.equal(h.nodes['viewfinder'].style.width,'270px');assert.equal(h.nodes['viewfinder'].style.height,'480px');
+ await h.nodes['camera-shutter'].onclick();assert.equal(h.canvases[0][0]/h.canvases[0][1],9/16);assert.equal(h.draws[0].length,9);
+ h.api.open('photo',f=>h.captures.push(f));await tick();h.rotate(true);assert.equal(h.api.frame().width/h.api.frame().height,9/16);
+ await h.nodes['camera-shutter'].onclick();assert.equal(h.canvases[1][0]/h.canvases[1][1],9/16);assert.equal(h.captures.length,2);
 });
 
 test('late stop or error from a discarded recording cannot interrupt its replacement',async()=>{
@@ -83,7 +83,7 @@ test('landscape camera output is cropped to portrait in both preview and recorde
  const crop=h.api.frame();assert.equal(crop.width/crop.height,9/16);assert.ok(crop.x>0);assert.equal(crop.y,0);
  assert.equal(h.nodes['viewfinder'].style.aspectRatio,String(9/16));
  h.nodes['camera-shutter'].onclick();const input=h.recorders[0].input;
- assert.ok(Math.abs(input.canvas.width/input.canvas.height-9/16)<.001);assert.equal(input.fps,30);assert.equal(input.getAudioTracks().length,1);
+ assert.equal(input.canvas.width/input.canvas.height,9/16);assert.equal(input.fps,30);assert.equal(input.getAudioTracks().length,1);
  assert.equal(h.draws[0][1],crop.x);assert.equal(h.draws[0][3],crop.width);assert.ok(input.canvas.width<=crop.width);
  h.rotate(true);assert.equal(h.api.frame().width/h.api.frame().height,9/16);
  const paint=h.intervals[0];paint();assert.equal(h.draws[1][3]/h.draws[1][4],9/16);
@@ -94,9 +94,9 @@ test('portrait camera streams record directly without adding a canvas conversion
  h.api.open('video',f=>h.captures.push(f));await tick();h.nodes['camera-shutter'].onclick();
  assert.equal(h.recorders[0].input,h.nodes['camera-live'].srcObject);assert.equal(h.draws.length,0);h.nodes['camera-shutter'].onclick();assert.equal(h.captures.length,1);
 });
-test('rotating before recording selects landscape, while rotating mid-recording keeps its frame stable',async()=>{
- const h=harness();h.api.open('video',f=>h.captures.push(f));await tick();h.rotate(true);assert.equal(h.api.frame().width/h.api.frame().height,16/9);
- h.nodes['camera-shutter'].onclick();h.rotate(false);assert.equal(h.api.frame().width/h.api.frame().height,16/9);
+test('rotating before or during video recording keeps preview and output at 9:16',async()=>{
+ const h=harness();h.api.open('video',f=>h.captures.push(f));await tick();h.rotate(true);assert.equal(h.api.frame().width/h.api.frame().height,9/16);
+ h.nodes['camera-shutter'].onclick();assert.equal(h.recorders[0].input.canvas.width/h.recorders[0].input.canvas.height,9/16);h.rotate(false);assert.equal(h.api.frame().width/h.api.frame().height,9/16);
  h.nodes['camera-shutter'].onclick();assert.equal(h.captures.length,1);
 });
 
@@ -109,4 +109,15 @@ test('failed crop recorder setup releases its generated track without losing the
 test('canceling a cropped recording stops both its canvas and microphone and discards the clip',async()=>{
  const h=harness();h.api.open('video',()=>assert.fail('Canceled capture must not be received'));await tick();h.nodes['camera-shutter'].onclick();
  h.nodes['close-camera'].onclick();assert.equal(h.api.isRecording(),false);assert.equal(h.api.isActive(),false);assert.ok(h.tracks.every(t=>t.stopped));
+});
+
+test('photo and video request 9:16 even when opened in landscape and keep the same preview crop',async()=>{
+ for(const kind of ['photo','video']){
+  let requested;const h=harness((constraints,stream)=>{requested=constraints;return Promise.resolve(stream());});h.rotate(true);
+  h.api.open(kind,f=>h.captures.push(f));await tick();assert.equal(requested.video.width.ideal/requested.video.height.ideal,9/16);assert.equal(requested.video.aspectRatio.ideal,9/16);
+  assert.equal(h.nodes['viewfinder'].style.aspectRatio,String(9/16));const crop=h.api.frame();assert.equal(crop.width/crop.height,9/16);
+  await h.nodes['camera-shutter'].onclick();const dimensions=kind==='photo'?h.canvases[0]:[h.recorders[0].input.canvas.width,h.recorders[0].input.canvas.height];
+  assert.equal(dimensions[0]/dimensions[1],9/16);assert.ok(dimensions[0]<=crop.width);assert.ok(dimensions[1]<=crop.height);
+  if(kind==='video')h.nodes['camera-shutter'].onclick();assert.ok(h.tracks.every(t=>t.stopped));
+ }
 });
