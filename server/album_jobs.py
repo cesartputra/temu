@@ -94,6 +94,8 @@ def process_next(album):
     finally:album.worker_slots.release()
 
 def start_workers(album,stop):
+    import album_video
+    album_video.start_worker(album,stop)
     def finalize():
         while not stop.is_set():
             try:

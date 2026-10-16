@@ -17,11 +17,11 @@ _temporary_lock=threading.Lock()
 _temporary_reserved=0
 
 @contextmanager
-def temporary_space(size):
+def temporary_space(size,directory=None):
     """Reserve space across workers, including downloads not yet on disk."""
     global _temporary_reserved
     with _temporary_lock:
-        if shutil.disk_usage(tempfile.gettempdir()).free < _temporary_reserved+size+128*1024*1024:
+        if shutil.disk_usage(directory or tempfile.gettempdir()).free < _temporary_reserved+size+128*1024*1024:
             raise StorageError('Penyimpanan sementara sedang sibuk. Silakan coba lagi.')
         _temporary_reserved+=size
     try:yield
@@ -52,7 +52,7 @@ class S3Storage:
             raise StorageError('Konfigurasi Object Storage belum lengkap.')
         self.host=p.netloc
     def key(self,kind,identifier,extension=''):
-        if kind not in ('incoming','media','thumbnails') or not re.fullmatch(r'[a-f0-9]{32}',identifier) or not re.fullmatch(r'\.[a-z0-9]+|',extension): raise StorageError('Kunci objek tidak valid.')
+        if kind not in ('incoming','media','thumbnails','previews') or not re.fullmatch(r'[a-f0-9]{32}',identifier) or not re.fullmatch(r'\.[a-z0-9]+|',extension): raise StorageError('Kunci objek tidak valid.')
         return self.prefix+kind+'/'+identifier+extension
     def uri(self,key=''): return '/'+quote(self.bucket+'/'+key,safe='/-_.~')
     def presign(self,method,key,expires=300,mime=None,size=None,download=None,now=None):

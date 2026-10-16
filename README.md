@@ -237,6 +237,16 @@ Reservasi kapasitas mencakup file tersimpan, staging dan salinan final yang belu
 
 Pengujian otomatis memakai 180 klien foto/video dengan Object Storage tiruan dan memverifikasi seluruh 180 momen, maksimum 12 tiket aktif, 24 tiket tertunda, dan maksimum dua penyalinan berat bersamaan. Pengujian juga memeriksa pembatalan saat worker berjalan, lease kedaluwarsa, migrasi antrean lama, dan reservasi disk bersama. Ini memverifikasi batas aplikasi; kapasitas jaringan/latensi layanan produksi perlu diamati saat acara.
 
+### Kompresi video tanpa mengganti file asli
+
+Docker memasang FFmpeg/FFprobe. Satu worker kompresi berprioritas rendah berjalan terpisah dari dua worker finalisasi; `TEMU_ALBUM_WORKERS` tetap hanya mengatur finalisasi. Video baru dan video lama yang belum diproses ditemukan otomatis dari database. Upload dianggap selesai setelah original tersimpan, tanpa menunggu encoding. Pekerjaan kompresi dicatat di SQLite, dapat melanjutkan setelah restart (lease 20 menit), dan dibatasi satu video pada satu waktu.
+
+Salinan playback memakai MP4 H.264/AAC, CRF 22, maksimal 1920×1080 atau 1080×1920 tanpa memperbesar sumber, maksimal 30 fps, serta faststart. HDR PQ/HLG dipetakan ke SDR hanya pada preview. Original beserta resolusi, suara, dan frame rate sumber tetap disimpan. Preview hanya dipublikasikan bila lebih kecil, durasinya lengkap, dan original masih ada. Pemutar memakai `?preview=1`, otomatis kembali ke original jika pemutaran gagal; `?download=1` selalu original, termasuk jika digabung dengan parameter preview. Pengaturan waktu pembukaan dan akses admin tetap berlaku. Menghapus/reset momen juga menghapus preview, dan pekerjaan yang sedang berjalan tidak boleh memunculkannya kembali.
+
+Encoding memakai satu thread dengan batas 10 menit dan batas alokasi per blok 64 MiB. Pada Linux, ruang alamat child dibatasi maksimal 768 MiB atau dua pertiga batas RAM cgroup pod, mana yang lebih kecil. Input untuk preview dibatasi 100 MiB, 4096 px per sisi, 9 megapiksel, dan durasi 10 menit; file di luar batas atau gagal diproses tetap dapat diakses sebagai original. File sementara mencadangkan ruang bersama finalisasi (input + maksimal 100 MiB output, menyisakan 128 MiB); tidak ditumpuk dalam RAM. Jika runtime tidak menyediakan FFmpeg, layanan tetap berjalan dan memakai original. Rekomendasi video aktif: pod album 2 vCPU/2 GB RAM; pada 0,5 vCPU/512 MB encoding dapat lambat atau gagal dengan original tetap tersedia.
+
+Mode S3 menyimpan preview pada key privat `previews/` dengan URL sementara; quota bucket juga mencadangkan maksimal satu salinan seukuran original per video. Mode lokal menyimpan preview terpisah di folder media. Kompresi terjadi setelah upload sehingga tidak mempercepat transfer awal dari HP dan menambah kebutuhan storage. Backup database saja tidak mencadangkan file preview/original.
+
 ### Dua container, alamat album tetap
 
 - Container buku tamu/undangan: 0,5 vCPU, 512 MB, volume `/data` 2 GB; `TEMU_SERVICE_ROLE=guestbook`.

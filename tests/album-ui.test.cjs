@@ -38,6 +38,15 @@ test('gallery escapes guest text and preserves multiline caption',async()=>{
  assert.ok(h.nodes['#grid'].innerHTML.includes('&lt;img onerror=alert(1)&gt;'));assert.doesNotMatch(h.nodes['#grid'].innerHTML,/moment-meta|<script>/);assert.equal(h.nodes['#more'].hidden,true);
 });
 
+test('video playback requests the compressed preview, retries the original on error and downloads original bytes',async()=>{
+ const h=harness();await tick();h.run('items=[{id:"video1",name:"Guest",caption:"",mime:"video/mp4",filter:"original",created:"2026-11-21T12:00:00Z"}]');
+ const video=h.context.document.querySelector('#moment-detail video'),listeners={};video.currentTime=3;
+ video.addEventListener=(name,fn,options)=>{listeners[name]=fn;assert.equal(options.once,true);};
+ h.nodes['#grid'].onclick({target:{closest(){return {dataset:{id:'video1'}};}}});
+ const html=h.nodes['#moment-detail'].innerHTML;assert.match(html,/src="\/api\/album\/file\/video1\?preview=1"/);assert.match(html,/href="\/api\/album\/file\/video1\?download=1"/);
+ listeners.error();assert.equal(video.src,'/api/album/file/video1');video.currentTime=0;listeners.loadedmetadata();assert.equal(video.currentTime,3);
+});
+
 test('photo upload sends decorated bytes and avoids applying the chosen filter a second time',async()=>{
  const h=harness();await tick();h.nodes['#guest-name'].value='Bayu';await h.run('selectFile({name:"camera.jpg",type:"image/jpeg",size:1024})');
  await h.nodes['#upload-form'].onsubmit({preventDefault(){}});

@@ -1,6 +1,6 @@
 """Shared guest album: original files, bounded streaming uploads, timed reveal."""
 import hmac, json, os, re, secrets, tempfile, threading, tarfile, shutil, time
-import album_storage, album_jobs
+import album_storage, album_jobs, album_video
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
@@ -85,7 +85,7 @@ class Album:
             CREATE TABLE IF NOT EXISTS album_uploads(id TEXT PRIMARY KEY,token TEXT NOT NULL,name TEXT NOT NULL,caption TEXT NOT NULL,filter TEXT NOT NULL,mime TEXT NOT NULL,size INTEGER NOT NULL,expires INTEGER NOT NULL,completed INTEGER NOT NULL DEFAULT 0);''')
             c.execute('INSERT OR IGNORE INTO app_secrets(name,value) VALUES(?,?)',('album-thumbnails',secrets.token_urlsafe(48)))
             self.thumbnail_secret=c.execute('SELECT value FROM app_secrets WHERE name=?',('album-thumbnails',)).fetchone()[0]
-        album_jobs.initialize(self)
+        album_jobs.initialize(self);album_video.initialize(self)
     def config(self):
         with self.db.connect() as c:row=c.execute('SELECT config FROM album_settings WHERE id=1').fetchone()
         return json.loads(row[0]) if row else None
@@ -163,7 +163,10 @@ class Album:
                 # succeeds. Already completed URLs can still be reused until TTL.
                 replay=c.execute('SELECT coalesce(sum(size),0) FROM album_uploads WHERE completed=1').fetchone()[0]
                 if used+reserved+size>MAX_ALBUM:raise AlbumError('Album sudah penuh. Hubungi pengantin.',413)
-                if used+2*(reserved+size)+replay+(count+album_jobs.PENDING_UPLOADS)*512*1024>album_jobs.STORAGE_BUDGET:raise AlbumError('Ruang penyimpanan sedang dicadangkan. Coba lagi sebentar.',429)
+                # Reserve up to one original-sized playback copy for each video.
+                video_space=c.execute("SELECT coalesce(sum(CASE WHEN v.state='done' THEN v.size WHEN v.state IN ('failed','skipped') AND v.object_key IS NULL THEN 0 ELSE i.size END),0) FROM album_items i LEFT JOIN album_video_jobs v ON v.id=i.id WHERE i.mime LIKE 'video/%'").fetchone()[0]
+                video_space+=c.execute("SELECT coalesce(sum(size),0) FROM album_uploads WHERE completed<=0 AND mime LIKE 'video/%'").fetchone()[0]
+                if used+video_space+(size if mime.startswith('video/') else 0)+2*(reserved+size)+replay+(count+album_jobs.PENDING_UPLOADS)*512*1024>album_jobs.STORAGE_BUDGET:raise AlbumError('Ruang penyimpanan sedang dicadangkan. Coba lagi sebentar.',429)
                 pending=c.execute('SELECT count(*) FROM album_uploads WHERE completed=0').fetchone()[0]
                 active=c.execute("SELECT count(*) FROM album_uploads u LEFT JOIN album_jobs j ON u.id=j.id WHERE u.completed=0 AND j.id IS NULL").fetchone()[0]
                 if pending>=album_jobs.PENDING_UPLOADS or active>=album_jobs.ACTIVE_UPLOADS:raise AlbumError('Menunggu giliran unggah. Foto atau videomu tetap siap.',429)
@@ -285,6 +288,11 @@ class Album:
                 c.execute('UPDATE album_uploads SET completed=-1 WHERE completed=0')
                 c.execute("UPDATE album_jobs SET state='failed',error='Album telah direset.' WHERE state IN ('queued','running')");c.commit()
             for identifier,mime in rows:
+                preview=c.execute('SELECT object_key FROM album_video_jobs WHERE id=?',(identifier,)).fetchone()
+                if preview and preview[0]:
+                    if c.execute('SELECT 1 FROM album_objects WHERE id=?',(identifier,)).fetchone():self.storage().delete(preview[0])
+                    else:(self.directory/preview[0]).unlink(missing_ok=True)
+                c.execute('DELETE FROM album_video_jobs WHERE id=?',(identifier,))
                 obj=c.execute('SELECT object_key,thumbnail_key FROM album_objects WHERE id=?',(identifier,)).fetchone()
                 if obj:
                     store=self.storage()
@@ -303,13 +311,17 @@ class Album:
         with self.db.connect() as c:row=c.execute('SELECT mime,size FROM album_items WHERE id=? AND hidden=0',(item,)).fetchone()
         if not row:raise AlbumError('Momen tidak ditemukan.',404)
         mime,size=row;ext={'image/jpeg':'.jpg','image/png':'.png','image/webp':'.webp','video/mp4':'.mp4','video/quicktime':'.mov','video/webm':'.webm'}[mime]
-        with self.db.connect() as c:obj=c.execute('SELECT object_key,thumbnail_key FROM album_objects WHERE id=?',(item,)).fetchone()
+        query=parse_qs(urlsplit(h.path).query)
+        with self.db.connect() as c:
+            obj=c.execute('SELECT object_key,thumbnail_key FROM album_objects WHERE id=?',(item,)).fetchone()
+            preview=c.execute("SELECT object_key,size FROM album_video_jobs WHERE id=? AND state='done'",(item,)).fetchone() if mime.startswith('video/') and query.get('preview')==['1'] and query.get('download')!=['1'] else None
         if obj:
-            query=parse_qs(urlsplit(h.path).query);key=obj[1] if query.get('thumb')==['1'] and obj[1] else obj[0]
+            key=preview[0] if preview else obj[1] if query.get('thumb')==['1'] and obj[1] else obj[0]
             download='momen-'+item[:8]+ext if query.get('download')==['1'] else None
             url=self.storage().presign('HEAD' if h.command=='HEAD' else 'GET',key,expires=300,download=download)
             h.send_response(307);h.send_header('Location',url);h.send_header('Cache-Control','private, no-store');h.send_header('Content-Length','0');h.end_headers();return
         file=self.directory/(item+ext)
+        if preview and (self.directory/preview[0]).is_file():file=self.directory/preview[0];mime='video/mp4';size=preview[1]
         if not file.is_file():raise AlbumError('File belum tersedia.',404)
         if parse_qs(urlsplit(h.path).query).get('thumb')==['1']:
             thumbnail=self.directory/(item+'.thumb.jpg')
