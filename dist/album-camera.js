@@ -1,15 +1,21 @@
 'use strict';
 window.TemuAlbumCamera=(()=>{
   const el=id=>document.getElementById(id);
-  let stream,recorder,timer,paintTimer,croppedStream,version=0,mode='photo',facing='environment',receive,changed=()=>{},discard=false,active=false;
-  function stopCrop(){clearInterval(paintTimer);croppedStream?.getVideoTracks().forEach(t=>t.stop());croppedStream=null;}
-  function stop(){version++;clearInterval(timer);if(recorder&&recorder.state!=='inactive'){discard=true;recorder.stop();}stopCrop();stream?.getTracks().forEach(t=>t.stop());stream=null;el('camera-live').srcObject=null;}
+  let stream,recorder,timer,paintTimer,framedStream,version=0,mode='photo',facing='environment',receive,changed=()=>{},discard=false,active=false;
+  function stopFraming(){clearInterval(paintTimer);framedStream?.getVideoTracks().forEach(t=>t.stop());framedStream=null;}
+  function stop(){version++;clearInterval(timer);if(recorder&&recorder.state!=='inactive'){discard=true;recorder.stop();}stopFraming();stream?.getTracks().forEach(t=>t.stop());stream=null;el('camera-live').srcObject=null;}
   function frame(){
     const video=el('camera-live'),width=video.videoWidth||1440,height=video.videoHeight||1920;
-    const ratio=9/16;
-    const w=Math.min(width,height*ratio),h=w/ratio;
-    return {x:(width-w)/2,y:(height-h)/2,width:w,height:h};
+    const unit=Math.max(1,Math.floor(Math.min(Math.max(width/9,height/16),mode==='photo'?240:120)));
+    return {width:unit*9,height:unit*16};
   }
+  function drawFrame(canvas){
+    const video=el('camera-live'),context=canvas.getContext('2d'),scale=Math.min(1,canvas.width/video.videoWidth,canvas.height/video.videoHeight);
+    const width=video.videoWidth*scale,height=video.videoHeight*scale;
+    context.imageSmoothingQuality='high';context.fillStyle='#252d26';context.fillRect(0,0,canvas.width,canvas.height);
+    context.drawImage(video,0,0,video.videoWidth,video.videoHeight,(canvas.width-width)/2,(canvas.height-height)/2,width,height);
+  }
+
   function layout(){
     const box=el('camera-stage').getBoundingClientRect(),photo=el('photo-preview'),video=el('video-preview');
     const ratio=active?frame().width/frame().height:!photo.hidden&&photo.naturalWidth?photo.naturalWidth/photo.naturalHeight:!video.hidden&&video.videoWidth?video.videoWidth/video.videoHeight:9/16;
@@ -28,8 +34,8 @@ window.TemuAlbumCamera=(()=>{
     try{
       if(!navigator.mediaDevices?.getUserMedia)throw Error('Kamera langsung memerlukan HTTPS dan browser yang mendukung kamera. Buka tautan di Safari atau Chrome.');
       if(mode==='video'&&!window.MediaRecorder)throw Error('Rekam video belum didukung browser ini. Gunakan foto atau buka Safari/Chrome terbaru.');
-      const height=mode==='photo'?1920:1280,width=height*9/16;
-      const next=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:facing},width:{ideal:width},height:{ideal:height},aspectRatio:{ideal:9/16}},audio:mode==='video'});
+      const portrait=!window.matchMedia('(orientation: landscape)').matches,long=mode==='photo'?3840:1920,short=long*9/16;
+      const next=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:facing},width:{ideal:portrait?short:long},height:{ideal:portrait?long:short},resizeMode:'none'},audio:mode==='video'});
       if(current!==version||!active){next.getTracks().forEach(t=>t.stop());return;}
       stream=next;el('camera-live').srcObject=stream;await el('camera-live').play();
       if(current!==version)return;
@@ -39,7 +45,7 @@ window.TemuAlbumCamera=(()=>{
   async function snap(){
     const video=el('camera-live');if(!video.videoWidth)return;
     el('camera-shutter').disabled=true;
-    const current=version,box=frame(),canvas=document.createElement('canvas'),unit=Math.max(1,Math.floor(Math.min(box.width/9,box.height/16)));canvas.width=unit*9;canvas.height=unit*16;canvas.getContext('2d').drawImage(video,box.x,box.y,box.width,box.height,0,0,canvas.width,canvas.height);
+    const current=version,box=frame(),canvas=document.createElement('canvas');canvas.width=box.width;canvas.height=box.height;drawFrame(canvas);
     const blob=await new Promise(r=>canvas.toBlob(r,'image/jpeg',.98));
     if(current!==version||!active)return;
     if(!blob){el('camera-status').textContent='Foto belum berhasil diambil. Coba lagi.';el('camera-shutter').disabled=false;return;}
@@ -52,14 +58,14 @@ window.TemuAlbumCamera=(()=>{
       if(!mime)throw Error('Format rekam video belum didukung. Ambil foto atau gunakan browser lain.');
       const chunks=[];let bytes=0,seconds=0;const current=version;discard=false;
       const video=el('camera-live'),box=frame();let input=stream;
-      // Some phone cameras ignore portrait constraints; record the same crop shown in the preview.
+      // Keep the entire camera view inside 9:16 instead of enlarging a center crop.
       if(video.videoWidth*16!==video.videoHeight*9){
-        const canvas=document.createElement('canvas'),unit=Math.max(1,Math.floor(Math.min(box.width/18,box.height/32,40)));
+        const canvas=document.createElement('canvas'),unit=Math.max(1,Math.floor(Math.min(box.width/18,box.height/32,60)));
         canvas.width=unit*18;canvas.height=unit*32;
         if(!canvas.captureStream)throw Error('Browser belum mendukung rekaman sesuai bingkai. Buka Safari atau Chrome terbaru.');
-        const context=canvas.getContext('2d'),draw=()=>{const crop=frame();context.drawImage(video,crop.x,crop.y,crop.width,crop.height,0,0,canvas.width,canvas.height);};
-        draw();croppedStream=canvas.captureStream(30);for(const track of stream.getAudioTracks())croppedStream.addTrack(track);
-        input=croppedStream;paintTimer=setInterval(draw,1000/30);
+        const draw=()=>drawFrame(canvas);
+        draw();framedStream=canvas.captureStream(30);for(const track of stream.getAudioTracks())framedStream.addTrack(track);
+        input=framedStream;paintTimer=setInterval(draw,1000/30);
       }
       const recording=new MediaRecorder(input,{mimeType:mime,videoBitsPerSecond:6000000});recorder=recording;
       recording.ondataavailable=e=>{if(e.data.size){chunks.push(e.data);bytes+=e.data.size;if(bytes>95*1024*1024&&recording.state==='recording')recording.stop();}};
@@ -67,7 +73,7 @@ window.TemuAlbumCamera=(()=>{
       recording.onstop=()=>{if(discard||current!==version||!active)return;clearInterval(timer);const type=recording.mimeType.split(';')[0],blob=new Blob(chunks,{type});if(!blob.size){close();el('camera-status').textContent='Video belum berhasil direkam. Tutup kamera lalu coba lagi.';return;}const captured=new File([blob],'video-'+Date.now()+(type==='video/mp4'?'.mp4':'.webm'),{type});close();receive(captured);};
       recording.start(1000);el('camera-switch').disabled=true;el('camera-shutter').setAttribute('aria-label','Selesai rekam');el('camera-shutter').classList.add('recording');el('camera-status').textContent='Merekam · 00:00 / 01:00';
       changed();timer=setInterval(()=>{seconds++;el('camera-status').textContent='Merekam · 00:'+String(seconds).padStart(2,'0')+' / 01:00';if(seconds>=60&&recording.state==='recording'){el('camera-shutter').disabled=true;recording.stop();}},1000);
-    }catch(e){stopCrop();el('camera-status').textContent=e.message;}
+    }catch(e){stopFraming();el('camera-status').textContent=e.message;}
   }
   el('camera-shutter').onclick=()=>mode==='photo'?snap():record();
   el('camera-switch').onclick=()=>{facing=facing==='environment'?'user':'environment';start();};
