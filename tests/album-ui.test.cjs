@@ -8,7 +8,7 @@ function harness(){
  class XHR{constructor(){this.upload={};requests.push(this);}open(method,url){this.url=url;}setRequestHeader(k,v){(this.headers??={})[k]=v;}send(f){this.sent=f;}abort(){this.onabort();}}
  document.querySelector('#guest-name');
  const config={title:'Reva & Cesar',count:0,uploadsOpen:true,revealed:true,filter:'film'};
- const context={TemuAlbumLoading:require('../dist/album-loading.js'),document,window:{matchMedia(){return {matches:false};},addEventListener(){}},setTimeout(fn,ms){timers.push({fn,ms});},location:{hash:'',pathname:'/album'},history:{replaceState(){}},fetch:async()=>({ok:true,json:async()=>config}),URL:{createObjectURL:()=> 'blob:moment',revokeObjectURL:u=>revoked.push(u)},URLSearchParams,XMLHttpRequest:XHR,TemuAlbumCamera:{isActive:()=>false,frame:()=>({width:1080,height:1440}),layout(){},close(){},open(){}},TemuAlbumPhoto:{overlay:async style=>style==='none'?null:({src:'/art.png',naturalWidth:3,naturalHeight:1}),placement:()=>({x:0,y:700,width:1000,height:300}),prepare:async(f,filter,overlay,effect)=>{const result={name:'decorated.jpg',type:'image/jpeg',size:2000};prepared.push({f,filter,overlay,effect,result});return result;}},TemuAlbumUpload:require('../dist/album-upload.js'),crypto:require('node:crypto').webcrypto,AbortController,sessionStorage:{getItem(){return null},setItem(){},removeItem(){}},setInterval(){},Date,AbortSignal};
+ const context={TemuAlbumLoading:require('../dist/album-loading.js'),document,window:{matchMedia(){return {matches:false};},addEventListener(){}},setTimeout(fn,ms){timers.push({fn,ms});},location:{hash:'',pathname:'/album'},history:{replaceState(){}},fetch:async()=>({ok:true,json:async()=>config}),URL:{createObjectURL:()=> 'blob:moment',revokeObjectURL:u=>revoked.push(u)},URLSearchParams,XMLHttpRequest:XHR,TemuAlbumCamera:{isActive:()=>false,isRecording:()=>false,frame:()=>({width:1080,height:1440}),layout(){},close(){},open(){}},TemuAlbumPhoto:{overlay:async style=>style==='none'?null:({src:'/art.png',naturalWidth:3,naturalHeight:1}),placement:()=>({x:0,y:700,width:1000,height:300}),prepare:async(f,filter,overlay,effect)=>{const result={name:'decorated.jpg',type:'image/jpeg',size:2000};prepared.push({f,filter,overlay,effect,result});return result;}},TemuAlbumUpload:require('../dist/album-upload.js'),crypto:require('node:crypto').webcrypto,AbortController,sessionStorage:{getItem(){return null},setItem(){},removeItem(){}},setInterval(){},Date,AbortSignal};
  vm.runInNewContext(source,context);
  return {nodes,revoked,requests,prepared,timers,context,run:s=>vm.runInNewContext(s,context),config};
 }
@@ -133,9 +133,9 @@ test('inline camera capture hands its new photo to the album without dropping it
 
 test('name, camera and gallery are separate pages; blank names cannot start the camera',async()=>{
  const h=harness();await tick();let opened=0;h.context.TemuAlbumCamera.open=()=>opened++;
- assert.equal(h.nodes['#name-step'].hidden,false);assert.equal(h.nodes['#capture'].hidden,true);assert.equal(h.nodes['#album-nav'].hidden,true);
+ assert.equal(h.nodes['#name-step'].hidden,false);assert.equal(h.nodes['#capture'].hidden,true);assert.equal(h.nodes['#album-nav'].hidden,true);assert.equal(h.nodes['#studio-header'].hidden,true);
  h.nodes['#guest-name'].value='   ';h.nodes['#name-form'].onsubmit({preventDefault(){}});assert.equal(opened,0);assert.ok(h.nodes['#guest-name'].validationMessage);
- h.nodes['#guest-name'].value='  Bayu  ';h.nodes['#name-form'].onsubmit({preventDefault(){}});assert.equal(h.nodes['#guest-name'].value,'Bayu');assert.equal(opened,1);assert.equal(h.nodes['#capture'].hidden,false);assert.equal(h.nodes['#name-step'].hidden,true);assert.equal(h.nodes['#album-nav'].hidden,false);
+ h.nodes['#guest-name'].value='  Bayu  ';h.nodes['#name-form'].onsubmit({preventDefault(){}});assert.equal(h.nodes['#guest-name'].value,'Bayu');assert.equal(opened,1);assert.equal(h.nodes['#capture'].hidden,false);assert.equal(h.nodes['#name-step'].hidden,true);assert.equal(h.nodes['#album-nav'].hidden,false);assert.equal(h.nodes['#studio-header'].hidden,false);
 });
 test('capture opens optional message dialog; closing it keeps the photo; success closes it',async()=>{
  const h=harness();await tick();h.nodes['#guest-name'].value='Bayu';await h.run('selectFile({name:"camera.jpg",type:"image/jpeg",size:1024})');assert.equal(h.nodes['#caption-dialog'].open,true);
@@ -150,4 +150,21 @@ test('photo aspect ratios never leak into generic buttons or icon/navigation con
  }
  const html=fs.readFileSync('dist/album.html','utf8');assert.match(html,/id="refresh"[^>]*aria-label="Perbarui album"[^>]*><svg/);assert.doesNotMatch(html,/Perbarui ↻|Foto baru menggunakan filter dan pilihan overlay kamu/);
  for(const id of ['close-caption','close-dialog','close-camera'])assert.match(html,new RegExp('id="'+id+'"[^>]*><svg'));
+});
+
+test('recording locks navigation, filters and mode changes until recording finishes',async()=>{
+ const h=harness();await tick();h.context.TemuAlbumCamera.isRecording=()=>true;h.run('captureState()');
+ for(const id of ['edit-name','tab-capture','tab-gallery','take-photo','take-video'])assert.equal(h.nodes['#'+id].disabled,true);
+ assert.equal(h.nodes.film.disabled,true);h.context.TemuAlbumCamera.isRecording=()=>false;h.run('captureState()');
+ for(const id of ['edit-name','tab-capture','tab-gallery','take-photo','take-video'])assert.equal(h.nodes['#'+id].disabled,false);
+});
+test('retaking a captured video reopens the inline video recorder and keeps the previous clip',async()=>{
+ const h=harness();await tick();await h.run('selectFile({name:"clip.mp4",type:"video/mp4",size:1024})');
+ let kind;h.context.TemuAlbumCamera.open=value=>kind=value;h.nodes['#discard'].onclick();assert.equal(kind,'video');assert.equal(h.run('file.name'),'clip.mp4');
+});
+test('shared navigation sits in the top header alongside name, with no bottom navigation space',()=>{
+ const html=fs.readFileSync('dist/album.html','utf8'),css=fs.readFileSync('dist/album.css','utf8');
+ const header=html.match(/<header id="studio-header"[\s\S]*?<\/header>/)[0];
+ for(const id of ['edit-name','album-nav','tab-capture','tab-gallery'])assert.ok(header.includes('id="'+id+'"'));
+ assert.doesNotMatch(css,/nav-height/);assert.match(css,/\.studio-header\{[^}]*top:0/);
 });
