@@ -168,7 +168,7 @@ Keduanya memakai kunci tamu dan penguncian browser yang sama. Akses tanpa
 tautan unik hanya menampilkan halaman pemeriksaan, tanpa isi undangan.
 
 Pembuka versi 2 memakai animasi amplop yang sama dengan album. Bagian dresscode
-menampilkan ilustrasi pakaian navy, grey, dan silver. Dua rekening wedding gift
+menampilkan ilustrasi pakaian navy, black, dan grey. Dua rekening wedding gift
 ditetapkan langsung di `server/templates/invitation2.html`, berikut tombol salinnya;
 pengaturan rekening di Temu dihapus. Kolom rekening dari data sinkronisasi lama
 tetap diterima untuk kompatibilitas, tetapi tidak diterbitkan oleh API undangan.

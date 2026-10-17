@@ -18,8 +18,8 @@
    <path d="m137 40 2 7 7 2-7 2-2 7-2-7-7-2 7-2Zm119 118 2 5 5 2-5 2-2 5-2-5-5-2 5-2Z" fill="#c9ab72" stroke="none"/>
   </g>
  </defs>
- <view id="navy" viewBox="0 0 280 260"/><view id="grey" viewBox="280 0 280 260"/><view id="silver" viewBox="560 0 280 260"/>
+ <view id="navy" viewBox="0 0 280 260"/><view id="black" viewBox="280 0 280 260"/><view id="grey" viewBox="560 0 280 260"/>
  <use href="#outfits" style="--cloth:#243650;--lapel:#16263e"/>
- <use href="#outfits" x="280" style="--cloth:#96989e;--lapel:#72777f"/>
- <use href="#outfits" x="560" style="--cloth:#d0d5dd;--lapel:#a9b1bf"/>
+ <use href="#outfits" x="280" style="--cloth:#25272b;--lapel:#111317"/>
+ <use href="#outfits" x="560" style="--cloth:#96989e;--lapel:#72777f"/>
 </svg>
