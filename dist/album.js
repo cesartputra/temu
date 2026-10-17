@@ -1,15 +1,16 @@
 'use strict';
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const presets={original:'none',film:'sepia(.3) saturate(.85) contrast(1.08) brightness(1.03)',warm:'sepia(.45) saturate(1.15) brightness(1.04)',mono:'grayscale(1) contrast(1.1)',dazz:'sepia(.18) saturate(.82) contrast(1.08) brightness(1.06)'};
-let info,file,preset='film',previewURL,enqueuing=false,items=[],next=0,loading=false,hasName=false,queueRows=[];
+let info,file,preset='film',previewURL,enqueuing=false,items=[],next=0,loading=false,hasName=false,queueRows=[],mirrorPhoto=false,frontPhoto=false,captureFacing='environment';
 function notice(text,error=false){$('#status').hidden=!error;$('#status').textContent=text;$('#status').classList.toggle('error',error);$('#upload-state').hidden=!text;$('#upload-state').textContent=text;$('#upload-state').classList.toggle('error',error);}
 function captureState(){
  $('#upload').disabled=enqueuing||!file||!info?.uploadsOpen;
- $('#take-photo').disabled=$('#take-video').disabled=enqueuing||!info?.uploadsOpen;
+ $('#take-photo').disabled=$('#take-selfie').disabled=$('#take-video').disabled=enqueuing||!info?.uploadsOpen;
  $('#discard').hidden=!file;$('#discard').disabled=$('#close-caption').disabled=enqueuing;
  $('#capture-review').hidden=!file;$('#review-capture').hidden=!file;
  $('#review-capture').disabled=$('#retake-capture').disabled=enqueuing;
  for(const button of document.querySelectorAll('[data-filter]'))button.disabled=enqueuing;
+ $('#mirror-photo').hidden=!file?.type.startsWith('image/');$('#mirror-photo').disabled=enqueuing;$('#mirror-photo').setAttribute('aria-pressed',String(mirrorPhoto));$('#photo-preview').style.transform=mirrorPhoto?'scaleX(-1)':'';
  $('#preview-label').hidden=!file;$('#native-actions').hidden=!!file;
 }
 function layout(){
@@ -44,20 +45,22 @@ async function init(){
  try{const key=new URLSearchParams(location.hash.slice(1)).get('k');const data=key?await api('join',{key}):await api('info');if(key)history.replaceState(null,'',location.pathname);applyInfo(data);choosePreset(data.filter);$('#gate').hidden=true;$('#content').hidden=false;if(!hasName)showPage('name');outbox.resume().catch(e=>notice(e.message,true));resumePending();}
  catch(e){$('#gate').hidden=false;$('#content').hidden=true;notice(e.message,true);}finally{$('#album-loading').hidden=true;}
 }
-function selectFile(f){
+function selectFile(f,front=false){
  if(!f||enqueuing)return;
  if(f.size>100*1024*1024){notice('Momen terlalu besar. Batas foto atau video adalah 100 MB.',true);return;}
  if(!['image/jpeg','image/png','image/webp','video/mp4','video/quicktime','video/webm'].includes(f.type)){notice('Gunakan foto JPG, PNG, WebP atau video MP4, MOV, WebM. Pilih format Paling Kompatibel pada kamera jika hasilnya HEIC.',true);return;}
- if(previewURL)URL.revokeObjectURL(previewURL);file=f;previewURL=URL.createObjectURL(f);
+ if(previewURL)URL.revokeObjectURL(previewURL);file=f;frontPhoto=front;mirrorPhoto=front&&f.type.startsWith('image/');previewURL=URL.createObjectURL(f);
  const photo=f.type.startsWith('image/');$('#photo-preview').hidden=!photo;$('#video-preview').hidden=photo;$('#video-preview').pause();
  for(const media of [$('#photo-preview'),$('#video-preview')])media.removeAttribute('src');
  const media=photo?$('#photo-preview'):$('#video-preview');media.src=previewURL;media.onload=media.onloadedmetadata=layout;
  $('#placeholder').hidden=true;captureState();choosePreset(preset);layout();notice('');
 }
-function openCamera(kind){if(enqueuing||!info?.uploadsOpen)return;const input=$('#native-'+kind);input.value='';input.click();}
-for(const kind of ['photo','video']){$('#take-'+kind).onclick=()=>openCamera(kind);$('#native-'+kind).onchange=event=>selectFile(event.target.files[0]);}
-function clearPreview(){file=null;$('#photo-preview').hidden=$('#video-preview').hidden=true;$('#video-preview').pause();for(const media of [$('#photo-preview'),$('#video-preview')])media.removeAttribute('src');$('#placeholder').hidden=false;if(previewURL)URL.revokeObjectURL(previewURL);previewURL=null;captureState();layout();}
-$('#retake-capture').onclick=$('#discard').onclick=()=>{if(enqueuing)return;$('#caption-dialog').close();openCamera(file?.type.startsWith('video/')?'video':'photo');};
+function openCamera(kind,facing='environment'){if(enqueuing||!info?.uploadsOpen)return;const input=$('#native-'+kind);captureFacing=facing;input.setAttribute('capture',facing);input.value='';input.click();}
+for(const kind of ['photo','video']){$('#take-'+kind).onclick=()=>openCamera(kind);$('#native-'+kind).onchange=event=>selectFile(event.target.files[0],kind==='photo'&&captureFacing==='user');}
+$('#take-selfie').onclick=()=>openCamera('photo','user');
+$('#mirror-photo').onclick=()=>{if(enqueuing||!file?.type.startsWith('image/'))return;mirrorPhoto=!mirrorPhoto;captureState();};
+function clearPreview(){file=null;mirrorPhoto=frontPhoto=false;$('#photo-preview').hidden=$('#video-preview').hidden=true;$('#video-preview').pause();for(const media of [$('#photo-preview'),$('#video-preview')])media.removeAttribute('src');$('#placeholder').hidden=false;if(previewURL)URL.revokeObjectURL(previewURL);previewURL=null;captureState();layout();}
+$('#retake-capture').onclick=$('#discard').onclick=()=>{if(enqueuing)return;$('#caption-dialog').close();openCamera(file?.type.startsWith('video/')?'video':'photo',frontPhoto?'user':'environment');};
 $('#close-caption').onclick=()=>$('#caption-dialog').close();$('#caption-dialog').addEventListener('cancel',event=>{if(enqueuing)event.preventDefault();});$('#review-capture').onclick=()=>{if(file&&!enqueuing)$('#caption-dialog').showModal();};
 $('#filters').onclick=e=>{const button=e.target.closest('[data-filter]');if(button)choosePreset(button.dataset.filter);};
 $('#retry').onclick=init;
@@ -74,7 +77,9 @@ $('#upload-form').onsubmit=async event=>{
  event.preventDefault();if(!file||enqueuing||!info?.uploadsOpen)return;const name=$('#guest-name').value.trim();if(!name)return;
  enqueuing=true;captureState();const captured=file;
  try{
-  await outbox.enqueue({id:crypto.randomUUID().replaceAll('-',''),blob:captured,name,caption:$('#caption').value.trim(),filter:preset});
+  const uploadFile=mirrorPhoto?await TemuAlbumPhoto.mirror(captured):captured;
+  if(uploadFile.size>100*1024*1024)throw Error('Hasil mirror melebihi batas 100 MB. Matikan Mirror atau ambil ulang.');
+  await outbox.enqueue({id:crypto.randomUUID().replaceAll('-',''),blob:uploadFile,name,caption:$('#caption').value.trim(),filter:preset});
   $('#caption-dialog').close();clearPreview();$('#caption').value='';$('#camera-status').textContent='Masuk antrean. Kamu bisa langsung mengambil foto atau video berikutnya.';notice('');
  }catch(e){notice(e.message,true);}finally{enqueuing=false;captureState();}
 };

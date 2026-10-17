@@ -67,3 +67,21 @@ test('close/reload icons stay inside buttons and capture has no overlay choices'
  const capture=html.slice(html.indexOf('<section id="capture"'),html.indexOf('<section id="gallery"'));assert.doesNotMatch(capture,/overlay|Pilih bingkai/);assert.match(capture,/Pilih filter/);
  for(const [,selectors,body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g))if(selectors.split(',').some(s=>['button','.tabs button','.icon-button'].includes(s.trim())))assert.doesNotMatch(body,/aspect-ratio/);
 });
+
+test('Selfie defaults to mirrored photo, queues the actual mirrored file, and resets only after enqueue succeeds',async()=>{
+ const h=harness();await tick();h.nodes['#guest-name'].value='Guest';h.nodes['#take-selfie'].onclick();assert.equal(h.nodes['#native-photo'].attributes.capture,'user');
+ const original={name:'selfie.jpg',type:'image/jpeg',size:1024},mirrored={name:'selfie.jpg',type:'image/jpeg',size:1024};h.nodes['#native-photo'].onchange({target:{files:[original]}});
+ assert.equal(h.run('mirrorPhoto'),true);assert.equal(h.nodes['#photo-preview'].style.transform,'scaleX(-1)');assert.equal(h.nodes['#mirror-photo'].hidden,false);
+ h.context.TemuAlbumPhoto.mirror=async source=>{assert.equal(source,original);return mirrored;};await h.nodes['#upload-form'].onsubmit({preventDefault(){}});
+ assert.equal(h.queued[0].blob,mirrored);assert.equal(h.run('mirrorPhoto'),false);assert.equal(h.nodes['#photo-preview'].style.transform,'');
+});
+test('mirror can be corrected when native camera already mirrors, and retake keeps selfie preference',async()=>{
+ const h=harness();await tick();h.nodes['#guest-name'].value='Guest';h.nodes['#take-selfie'].onclick();h.nodes['#native-photo'].onchange({target:{files:[{name:'selfie.jpg',type:'image/jpeg',size:1024}]}});
+ h.nodes['#mirror-photo'].onclick();assert.equal(h.run('mirrorPhoto'),false);h.nodes['#retake-capture'].onclick();assert.equal(h.nodes['#native-photo'].attributes.capture,'user');
+ h.context.TemuAlbumPhoto.mirror=()=>assert.fail('Mirror is explicitly off');const original=h.run('file');await h.nodes['#upload-form'].onsubmit({preventDefault(){}});assert.equal(h.queued[0].blob,original);
+ h.nodes['#take-photo'].onclick();assert.equal(h.nodes['#native-photo'].attributes.capture,'environment');h.nodes['#native-photo'].onchange({target:{files:[original]}});assert.equal(h.run('mirrorPhoto'),false);
+});
+test('mirror processing error retains source and preview for correction or retry',async()=>{
+ const h=harness();await tick();h.nodes['#guest-name'].value='Guest';h.run('selectFile({name:"selfie.jpg",type:"image/jpeg",size:1024},true)');h.context.TemuAlbumPhoto.mirror=async()=>{throw Error('Mirror unavailable');};
+ await h.nodes['#upload-form'].onsubmit({preventDefault(){}});assert.equal(h.queued.length,0);assert.equal(h.run('file.name'),'selfie.jpg');assert.equal(h.run('mirrorPhoto'),true);assert.match(h.nodes['#upload-state'].textContent,/Mirror unavailable/);assert.equal(h.nodes['#take-selfie'].disabled,false);
+});

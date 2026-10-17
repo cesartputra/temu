@@ -7,12 +7,12 @@
   <meta name="robots" content="noindex,nofollow">
   <title>Our shared moments · Reva & Cesar</title>
   <link rel="icon" href="icon.svg">
-  <link rel="stylesheet" href="album.css?v=20261017-1">
-  <script defer src="album-photo.js?v=20261017-1"></script>
+  <link rel="stylesheet" href="album.css?v=20261017-2">
+  <script defer src="album-photo.js?v=20261017-2"></script>
   <script defer src="album-queue.js?v=20261016-6"></script>
   <script defer src="album-upload.js?v=20261008-2"></script>
   <script defer src="album-loading.js?v=20261011-2"></script>
-  <script defer src="album.js?v=20261017-1"></script>
+  <script defer src="album.js?v=20261017-2"></script>
 </head>
 <body class="cover-closed">
   <section id="album-cover" class="album-cover" aria-labelledby="cover-title">
@@ -50,6 +50,7 @@
             <img id="photo-preview" alt="Pratinjau foto hasil kameramu" hidden>
 
             <video id="video-preview" controls playsinline preload="metadata" hidden></video>
+            <button id="mirror-photo" class="mirror-toggle" type="button" aria-pressed="false" aria-label="Mirror foto" hidden>Mirror</button>
             <span id="preview-label" class="preview-label" hidden></span>
           </div></div>
             <fieldset class="filter-fieldset"><legend>Pilih filter</legend><div id="filters" class="filters" role="group" aria-label="Filter foto dan video">
@@ -62,7 +63,7 @@
           <div class="camera-bottom">
             <input id="native-photo" type="file" accept="image/*" capture="environment" hidden>
             <input id="native-video" type="file" accept="video/*" capture="environment" hidden>
-            <div id="native-actions" class="native-capture-actions"><button id="take-photo" class="solid" type="button">Ambil foto</button><button id="take-video" class="outline" type="button">Rekam video</button></div>
+            <div id="native-actions" class="native-capture-actions"><button id="take-photo" class="solid" type="button">Ambil foto</button><button id="take-selfie" class="outline" type="button">Selfie</button><button id="take-video" class="outline" type="button">Rekam video</button></div>
             <div id="capture-review" class="capture-review" hidden><button id="retake-capture" class="outline" type="button">Ambil ulang</button><button id="review-capture" class="solid" type="button" hidden>Bagikan ke album ↗</button></div>
             <p id="camera-status" class="camera-status" role="status"></p>
           </div>
