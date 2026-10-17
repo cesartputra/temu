@@ -7,12 +7,12 @@
   <meta name="robots" content="noindex,nofollow">
   <title>Our shared moments · Reva & Cesar</title>
   <link rel="icon" href="icon.svg">
-  <link rel="stylesheet" href="album.css?v=20261016-5">
-  <script defer src="album-camera.js?v=20261016-5"></script>
-  <script defer src="album-photo.js?v=20261008-2"></script>
+  <link rel="stylesheet" href="album.css?v=20261016-6">
+  <script defer src="album-photo.js?v=20261016-6"></script>
+  <script defer src="album-queue.js?v=20261016-6"></script>
   <script defer src="album-upload.js?v=20261008-2"></script>
   <script defer src="album-loading.js?v=20261011-2"></script>
-  <script defer src="album.js?v=20261016-3"></script>
+  <script defer src="album.js?v=20261016-6"></script>
 </head>
 <body class="cover-closed">
   <section id="album-cover" class="album-cover" aria-labelledby="cover-title">
@@ -44,20 +44,12 @@
         </div></header>
       <section id="capture" class="camera-page-content" aria-label="Kamera album" hidden>
         <div class="camera-card">
-            <fieldset id="overlay-fieldset" class="filter-fieldset"><legend>Pilih bingkai</legend>
-              <div id="overlays" class="overlays" role="group" aria-label="Bingkai foto">
-                <button type="button" data-overlay="celebration" aria-pressed="true"><span class="overlay-sample celebration">✿ R&amp;C ✿</span><strong>Celebration</strong><small>Pengantin, kucing &amp; floral</small></button>
-                <button type="button" data-overlay="monogram" aria-pressed="false"><span class="overlay-sample monogram">R&amp;C<small>21 NOVEMBER 2026</small></span><strong>Monogram</strong><small>Inisial &amp; tanggal</small></button>
-                <button type="button" data-overlay="none" aria-pressed="false"><span class="overlay-sample clean">◎</span><strong>No overlay</strong><small>Biarkan momennya bercerita</small></button>
-              </div><p class="small">Bingkai ikut tersimpan pada fotomu.</p>
-            </fieldset>
           <div id="camera-stage" class="camera-stage"><div id="viewfinder" class="viewfinder">
-            <div id="placeholder"><span aria-hidden="true">◎</span><p>Aktifkan kamera untuk<br>mengabadikan momenmu.</p></div>
-            <video id="camera-live" autoplay muted playsinline hidden aria-label="Pratinjau kamera langsung"></video>
+            <div id="placeholder"><span aria-hidden="true">◎</span><p>Ambil foto atau video<br>menggunakan kamera HP kamu.</p></div>
+
             <img id="photo-preview" alt="Pratinjau foto hasil kameramu" hidden>
-            <img id="photo-overlay" class="photo-overlay" alt="" aria-hidden="true" hidden>
+
             <video id="video-preview" controls playsinline preload="metadata" hidden></video>
-            <div id="camera-actions" class="camera-actions" role="group" aria-label="Mode kamera"><button id="take-photo" type="button" aria-pressed="true">Foto</button><button id="take-video" type="button" aria-pressed="false">Video</button></div>
             <span id="preview-label" class="preview-label" hidden></span>
           </div></div>
             <fieldset class="filter-fieldset"><legend>Pilih filter</legend><div id="filters" class="filters" role="group" aria-label="Filter foto dan video">
@@ -68,11 +60,9 @@
               <button type="button" data-filter="dazz" aria-pressed="false"><span class="swatch dazz"><span>R&amp;C</span></span>Dazz Cam</button>
             </div></fieldset>
           <div class="camera-bottom">
-            <div id="camera-controls" class="camera-controls" hidden>
-              <button id="camera-switch" type="button" class="icon-button camera-round" aria-label="Ganti kamera depan atau belakang"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h15m-4-4 4 4-4 4M20 17H5m4-4-4 4 4 4"/></svg></button>
-              <button id="camera-shutter" type="button" class="camera-shutter" aria-label="Ambil foto" disabled><span aria-hidden="true"></span></button>
-              <button id="close-camera" type="button" class="icon-button camera-round" aria-label="Hentikan kamera"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
-            </div>
+            <input id="native-photo" type="file" accept="image/*" capture="environment" hidden>
+            <input id="native-video" type="file" accept="video/*" capture="environment" hidden>
+            <div id="native-actions" class="native-capture-actions"><button id="take-photo" class="solid" type="button">Ambil foto</button><button id="take-video" class="outline" type="button">Rekam video</button></div>
             <div id="capture-review" class="capture-review" hidden><button id="retake-capture" class="outline" type="button">Ambil ulang</button><button id="review-capture" class="solid" type="button" hidden>Bagikan momen ini ↗</button></div>
             <p id="camera-status" class="camera-status" role="status"></p>
           </div>
@@ -88,16 +78,24 @@
         <button id="more" class="outline full" type="button" hidden>Lihat lebih banyak ↓</button>
         <footer>Made by Cesar with love</footer>
       </section>
+      <section id="upload-queue" class="upload-queue" aria-label="Antrean unggahan" hidden><details><summary id="queue-summary" role="status"></summary><p class="small">Buka kembali album untuk melanjutkan jika upload dijeda saat kamera HP aktif. Jangan hapus data browser sebelum selesai.</p><div id="queue-items"></div></details></section>
     </main>
   </div>
   <dialog id="caption-dialog" aria-labelledby="caption-title"><button id="close-caption" class="icon-button dialog-close" type="button" aria-label="Tutup pesan"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     <form id="upload-form" class="upload-card"><span class="eyebrow">SATU MOMEN, SATU CERITA</span><h2 id="caption-title">Ada cerita<br><em>di baliknya?</em></h2><p id="form-hint">Pesan bersifat opsional. Kamu juga bisa langsung membagikan foto ini.</p>
       <label for="caption">Pesan <span>opsional</span></label><textarea id="caption" rows="3" maxlength="300" placeholder="Momen ini bikin aku tersenyum karena…"></textarea>
       <div id="file-info" hidden></div><button id="upload" type="submit" class="solid full" disabled>Bagikan ke album <span aria-hidden="true">↗</span></button>
-      <div class="upload-feedback"><progress id="progress" max="100" value="0" hidden aria-label="Progres unggahan"></progress><p id="upload-state" role="status" hidden></p><button id="cancel-upload" type="button" class="text-button" hidden>Batalkan unggahan</button></div>
+      <p id="upload-state" role="status" hidden></p>
       <button id="discard" type="button" class="text-button full" hidden>Ambil ulang</button>
     </form>
   </dialog>
   <dialog id="moment-dialog" aria-label="Detail momen"><button id="close-dialog" class="icon-button dialog-close" type="button" aria-label="Tutup momen"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button><div id="moment-detail"></div></dialog>
+  <dialog id="story-dialog" aria-labelledby="story-title"><button id="close-story" class="icon-button dialog-close" type="button" aria-label="Tutup Story"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    <div class="story-card"><span class="eyebrow">YOUR MOMENT, YOUR STORY</span><h2 id="story-title">Bagikan ke<br><em>Instagram Story.</em></h2>
+      <fieldset class="filter-fieldset"><legend>Pilih overlay Story</legend><div id="story-overlays" class="overlays" role="group" aria-label="Overlay Instagram Story"><button type="button" data-story-overlay="celebration" aria-pressed="true">Celebration</button><button type="button" data-story-overlay="monogram" aria-pressed="false">Monogram</button><button type="button" data-story-overlay="none" aria-pressed="false">No overlay</button></div></fieldset>
+      <div class="story-preview"><img id="story-preview" alt="Pratinjau Instagram Story 9:16" hidden></div><p id="story-status" class="small" role="status">Menyiapkan foto asli…</p>
+      <button id="share-story" class="solid full" type="button" disabled>Bagikan ke Instagram</button><a id="download-story" class="outline full" hidden download="reva-cesar-story.png">Unduh Story</a><p class="small">Pilih Instagram dan Story jika tersedia di menu berbagi HP. Kamu tetap menentukan kapan mempostingnya.</p>
+    </div>
+  </dialog>
 </body>
 </html>

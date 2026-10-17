@@ -43,6 +43,15 @@ class AlbumTests(unittest.TestCase):
   self.assertEqual(self.request('/api/album/admin')[0],401);c=self.config();self.assertEqual(c['key'],self.config('after','2026-11-21T20:30:00+07:00')['key']);self.assertEqual(self.request('/api/album/admin',admin=True)[0],200)
  def test_gate_no_cookie_and_invalid_shared_key(self):
   self.config();self.assertEqual(self.request('/album')[0],200);self.assertEqual(self.request('/api/album/info')[0],403);self.assertEqual(self.request('/api/album/join','POST',{'key':'wrong'})[0],403);self.assertEqual(self.request('/api/invite/album')[0],403)
+ def test_local_outbox_retry_preserves_original_bytes_and_publishes_once(self):
+  self.join(self.config());data=b'\xff\xd8\xff'+b'unchanged-original'*100+b'\xff\xd9'
+  headers={'X-Album-Name':'Guest','X-Album-Filter':'warm','X-Album-Request-Id':'a'*32}
+  first=self.request('/api/album/upload','PUT',data,mime='image/jpeg',headers=headers)
+  again=self.request('/api/album/upload','PUT',data,mime='image/jpeg',headers=headers)
+  self.assertEqual(first[0],201);self.assertEqual(again[0],201);identifier=json.loads(first[2])['id'];self.assertEqual(json.loads(again[2])['id'],identifier)
+  self.assertEqual(self.request('/api/album/file/'+identifier+'?download=1')[2],data)
+  self.assertEqual(json.loads(self.request('/api/album/items')[2])['items'][0]['filter'],'warm')
+  self.assertEqual(len(json.loads(self.request('/api/album/items')[2])['items']),1)
  def test_full_original_download_and_range_for_video(self):
   c=self.config();self.join(c);item,original=self.upload();status,headers,data=self.request('/api/album/file/'+item+'?download=1');self.assertEqual(status,200);self.assertEqual(data,original);self.assertIn('attachment',headers['Content-Disposition'])
   status,headers,data=self.request('/api/album/file/'+item,headers={'Range':'bytes=2-9'});self.assertEqual(status,206);self.assertEqual(data,original[2:10]);self.assertEqual(headers['Content-Range'],f'bytes 2-9/{len(original)}')

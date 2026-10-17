@@ -3,48 +3,35 @@ const source=fs.readFileSync('dist/album-photo.js','utf8');
 function harness({width=3024,height=4032,failEncode=false,failAsset=false,nativeFilter=true}={}){
  const draws=[],canvases=[],closed=[];
  class Artwork{constructor(){this.naturalWidth=2172;this.naturalHeight=724;}set src(value){if(value.endsWith('.svg')){this.naturalWidth=1200;this.naturalHeight=240;}this.url=value;queueMicrotask(()=>failAsset?this.onerror():this.onload());}}
- const ctx={filter:'none',drawImage:(image,...box)=>draws.push({image,box,filter:ctx.filter})};
- if(!nativeFilter){delete ctx.filter;ctx.getImageData=()=>({data:new Uint8ClampedArray([120,60,30,255])});ctx.putImageData=pixels=>ctx.pixels=pixels.data;}
- const document={createElement(){const c={getContext:()=>ctx,toBlob:(done,type,quality)=>{c.encoded={width:c.width,height:c.height,type,quality};done(failEncode?null:new Blob(['decorated'],{type}));}};canvases.push(c);return c;}};
- const context={window:{},Image:Artwork,document,createImageBitmap:async()=>({width,height,close:()=>closed.push(true)}),File:class extends Blob{constructor(parts,name,options){super(parts,options);this.name=name;}},URL,Blob};
- vm.runInNewContext(source,context);
+ const ctx={filter:'none',fillRect(){},drawImage:(image,...box)=>draws.push({image,box,filter:ctx.filter})};
+ if(!nativeFilter){delete ctx.filter;ctx.getImageData=()=>({data:new Uint8ClampedArray([120,60,30,255])});ctx.putImageData=p=>ctx.pixels=p.data;}
+ const document={createElement(){const c={getContext:()=>ctx,toBlob:(done,type,quality)=>{c.encoded={width:c.width,height:c.height,type,quality};done(failEncode?null:new Blob(['pixels'],{type}));}};canvases.push(c);return c;}};
+ const context={window:{},Image:Artwork,document,createImageBitmap:async()=>({width,height,close:()=>closed.push(true)}),File:class extends Blob{constructor(parts,name,options){super(parts,options);this.name=name;}},URL,Blob};vm.runInNewContext(source,context);
  return {photo:context.window.TemuAlbumPhoto,draws,canvases,closed,ctx};
 }
-test('portrait upload keeps camera dimensions and draws selected overlay after the filtered photo',async()=>{
- const h=harness(),result=await h.photo.prepare({name:'camera.png'},'sepia(.3)');
- assert.equal(result.type,'image/jpeg');assert.equal(result.name,'camera-reva-cesar.jpg');assert.equal(h.canvases[0].encoded.width,3024);assert.equal(h.canvases[0].encoded.height,4032);
- assert.equal(h.draws.length,2);assert.equal(h.draws[0].filter,'sepia(.3)');assert.equal(h.draws[1].filter,'none');assert.equal(h.draws[1].image.url,'/album-overlay-v1.png');assert.equal(h.closed.length,1);assert.equal(h.canvases[0].width,1);
-});
-test('visible overlay artwork touches both sides and bottom on portrait and landscape captures',()=>{
- const h=harness();for(const [w,hgt] of [[3024,4032],[4032,3024],[3840,2160]]){
-  const b=h.photo.placement(w,hgt,3);
-  assert.ok(Math.abs(b.x+b.width*4/2172)<1e-8);
-  assert.ok(Math.abs(b.x+b.width*2168/2172-w)<1e-8);
-  assert.ok(Math.abs(b.y+b.height*708/724-hgt)<1e-8);
-  assert.ok(b.y>=0);assert.equal(b.width/b.height,3);
+test('Story export uses a 9:16 lossless PNG with every original photo pixel and centered overlay',async()=>{
+ for(const [width,height] of [[3024,4032],[4032,3024],[720,1280]]){
+  const h=harness({width,height}),result=await h.photo.story(new Blob(['original']),'sepia(.3)','celebration');
+  const size=h.canvases[0].encoded;assert.equal(size.width/size.height,9/16);assert.equal(size.type,'image/png');assert.equal(size.quality,undefined);assert.equal(result.type,'image/png');
+  assert.deepEqual(h.draws[0].box,[(size.width-width)/2,(size.height-height)/2,width,height]);assert.equal(h.draws[0].filter,'sepia(.3)');
+  const [x,y,w,hgt]=h.draws[1].box;assert.ok(Math.abs(x+w/2-size.width/2)<1e-8);assert.ok(Math.abs(y+hgt/2-size.height/2)<1e-8);assert.equal(h.draws[1].filter,'none');assert.equal(h.closed.length,1);assert.equal(h.canvases[0].width,1);
  }
 });
-test('missing overlay prevents undecorated upload and permits loading again',async()=>{
- const h=harness({failAsset:true});await assert.rejects(h.photo.prepare({name:'camera.jpg'}),/Hiasan foto/);await assert.rejects(h.photo.overlay(),/Hiasan foto/);assert.equal(h.canvases.length,0);
+test('monogram and no overlay are available only for Story rendering',async()=>{
+ const h=harness();await h.photo.story(new Blob(),'none','monogram');assert.equal(h.draws[1].image.url,'/album-overlay-monogram.svg');
+ const clean=harness({failAsset:true});await clean.photo.story(new Blob(),'none','none');assert.equal(clean.draws.length,1);
 });
-test('canvas encoding failure closes decoded image and frees canvas',async()=>{
- const h=harness({failEncode:true});await assert.rejects(h.photo.prepare({name:'camera.jpg'}),/belum berhasil/);assert.equal(h.closed.length,1);assert.equal(h.canvases[0].width,1);
+test('thumbnail is separate, bounded to 720 px, and never applies a filter or overlay',async()=>{
+ const h=harness(),blob=await h.photo.thumbnail(new Blob(['original']));assert.equal(blob.type,'image/jpeg');assert.equal(h.canvases[0].encoded.width,540);assert.equal(h.canvases[0].encoded.height,720);assert.equal(h.draws.length,1);assert.equal(h.draws[0].filter,'none');assert.equal(h.closed.length,1);
 });
-test('very large capture fails safely without silently reducing resolution',async()=>{
- const h=harness({width:8000,height:6000});await assert.rejects(h.photo.prepare({name:'camera.jpg'}),/12 MP/);assert.equal(h.canvases.length,0);assert.equal(h.closed.length,1);
+test('oversized Story fails explicitly rather than downscaling the original photo',async()=>{
+ const h=harness({width:8064,height:6048});await assert.rejects(h.photo.story(new Blob()),/tanpa menurunkan resolusi/);assert.equal(h.canvases.length,0);assert.equal(h.closed.length,1);
 });
-
-test('bakes monochrome on camera browsers without native Canvas filter support',async()=>{
- const h=harness({nativeFilter:false,width:1,height:1});await h.photo.prepare({name:'camera.jpg'},'grayscale(1)');
- assert.equal(h.ctx.pixels[0],h.ctx.pixels[1]);assert.equal(h.ctx.pixels[1],h.ctx.pixels[2]);assert.equal(h.ctx.pixels[3],255);assert.equal(h.draws.length,2);
+test('missing art or failed encoding keeps errors visible and releases decoded resources',async()=>{
+ const art=harness({failAsset:true});await assert.rejects(art.photo.story(new Blob()),/Hiasan foto/);assert.equal(art.canvases.length,0);
+ const encode=harness({failEncode:true});await assert.rejects(encode.photo.story(new Blob()),/Unduh file asli/);assert.equal(encode.closed.length,1);assert.equal(encode.canvases[0].width,1);
 });
-
-test('no overlay never loads artwork and only encodes the filtered photograph',async()=>{
- const h=harness({failAsset:true});const result=await h.photo.prepare({name:'camera.jpg'},'none','none');assert.equal(h.draws.length,1);assert.equal(result.type,'image/jpeg');
-});
-test('monogram uses its own asset and sits flush along the lower edge',async()=>{
- const h=harness();await h.photo.prepare({name:'camera.jpg'},'none','monogram');assert.equal(h.draws[1].image.url,'/album-overlay-monogram.svg');assert.deepEqual(h.draws[1].box,[0,4032-3024/5,3024,3024/5]);
-});
-test('Dazz Cam inspired grain is baked into pixels before any overlay',async()=>{
- const h=harness({nativeFilter:false,width:1,height:1});await h.photo.prepare({name:'camera.jpg'},'none','none','dazz');assert.ok(h.ctx.pixels);assert.notDeepEqual([...h.ctx.pixels],[120,60,30,255]);assert.equal(h.ctx.pixels[3],255);assert.equal(h.draws.length,1);
+test('Safari pixel fallback applies monochrome and Dazz grain to Story exports',async()=>{
+ const mono=harness({width:1,height:1,nativeFilter:false});await mono.photo.story(new Blob(),'grayscale(1)','none');assert.equal(mono.ctx.pixels[0],mono.ctx.pixels[1]);assert.equal(mono.ctx.pixels[1],mono.ctx.pixels[2]);
+ const dazz=harness({width:1,height:1,nativeFilter:false});await dazz.photo.story(new Blob(),'none','none','dazz');assert.notDeepEqual([...dazz.ctx.pixels],[120,60,30,255]);
 });

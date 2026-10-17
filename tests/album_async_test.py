@@ -34,6 +34,15 @@ class AsyncQueueTests(unittest.TestCase):
         self.assertEqual(error.exception.status,429)
         self.queue(t);self.begin(12)
         with self.db.connect() as c:self.assertEqual(c.execute('SELECT count(*) FROM album_uploads').fetchone()[0],13)
+    def test_completed_request_recovers_after_ticket_cleanup_without_duplicate_original(self):
+        ticket=self.begin();self.queue(ticket);album_jobs.process_next(self.a)
+        with self.db.connect() as c:c.execute('UPDATE album_uploads SET expires=0 WHERE id=?',(ticket['id'],))
+        self.a.clean_uploads(self.store)
+        result=self.begin();self.assertTrue(result['completed']);self.assertEqual(result['id'],ticket['id']);self.assertIn('thumbnailKey',result)
+        self.assertEqual(self.a.public(self.config)['count'],1)
+        with self.assertRaises(album.AlbumError) as error:
+            self.a.begin_upload(self.handler({'requestId':format(0,'032x'),'name':'Changed','mime':'image/jpeg','size':len(fixtures.PHOTO),'filter':'original'}),self.config)
+        self.assertEqual(error.exception.status,409)
     def test_restart_recovers_queued_job_and_cancel_during_worker_never_publishes(self):
         t=self.begin();self.queue(t);restarted=album.Album(self.db);self.assertTrue(album_jobs.process_next(restarted));self.assertEqual(self.a.public(self.config)['count'],1)
         t=self.begin(1);self.queue(t);copy=self.store.copy

@@ -136,7 +136,7 @@ class Album:
             for item,mime in rows:
                 store.delete(store.key('incoming',item,EXTENSIONS[mime]))
                 with self.upload_lock,self.db.connect() as c:
-                    c.execute('DELETE FROM album_requests WHERE item=?',(item,));c.execute('DELETE FROM album_jobs WHERE id=?',(item,));c.execute('DELETE FROM album_uploads WHERE id=? AND expires<?',(item,int(time.time())))
+                    c.execute('DELETE FROM album_requests WHERE item=? AND NOT EXISTS (SELECT 1 FROM album_items WHERE id=?)',(item,item));c.execute('DELETE FROM album_jobs WHERE id=?',(item,));c.execute('DELETE FROM album_uploads WHERE id=? AND expires<?',(item,int(time.time())))
         finally:self.cleanup_lock.release()
     def begin_upload(self,h,config):
         if not config['uploadsOpen']:raise AlbumError('Unggahan album sudah ditutup.',403)
@@ -149,6 +149,10 @@ class Album:
         store=self.storage()
         with self.upload_lock,self.db.connect() as c:
             c.execute('BEGIN IMMEDIATE')
+            saved=c.execute('SELECT i.id,i.name,i.caption,i.filter,i.mime,i.size FROM album_requests r JOIN album_items i ON i.id=r.item WHERE r.request_id=?',(request_id,)).fetchone()
+            if saved:
+                if tuple(saved[1:])!=(name.strip(),caption.strip(),preset,mime,size):raise AlbumError('Permintaan unggahan berubah.',409)
+                return {'completed':True,'id':saved[0],'thumbnailKey':self.thumbnail_key(saved[0])}
             old=c.execute('SELECT u.id,u.token,u.name,u.caption,u.filter,u.mime,u.size,u.expires,u.completed FROM album_requests r JOIN album_uploads u ON r.item=u.id WHERE r.request_id=?',(request_id,)).fetchone()
             if old:
                 if tuple(old[2:7])!=(name.strip(),caption.strip(),preset,mime,size):raise AlbumError('Permintaan unggahan berubah.',409)
@@ -205,10 +209,20 @@ class Album:
         mime=handler.headers.get('Content-Type','').split(';')[0]
         exts={'image/jpeg':'.jpg','image/png':'.png','image/webp':'.webp','video/mp4':'.mp4','video/quicktime':'.mov','video/webm':'.webm'}
         if mime not in exts:raise AlbumError('Gunakan foto JPG, PNG, WebP atau video MP4, MOV, WebM.',415)
+        request_id=handler.headers.get('X-Album-Request-Id',secrets.token_hex(16))
+        if not re.fullmatch(r'[a-f0-9]{32}',request_id):raise AlbumError('Tiket unggahan tidak valid.')
+        from urllib.parse import unquote
+        name=unquote(handler.headers.get('X-Album-Name','Tamu'))[:80].strip() or 'Tamu'
+        caption=unquote(handler.headers.get('X-Album-Caption',''))[:300].strip()
+        preset=handler.headers.get('X-Album-Filter',config['filter'])
+        if preset not in FILTERS:raise AlbumError('Filter tidak valid.')
         # Serialized streaming keeps memory bounded and prevents concurrent quota overshoot.
         with self.upload_lock:
-            with self.db.connect() as c:used=c.execute('SELECT coalesce(sum(size),0) FROM album_items').fetchone()[0]
-            if used+size>MAX_ALBUM:raise AlbumError('Album sudah penuh. Hubungi pengantin.',413)
+            with self.db.connect() as c:
+                used=c.execute('SELECT coalesce(sum(size),0) FROM album_items').fetchone()[0]
+                saved=c.execute('SELECT i.id,i.name,i.caption,i.filter,i.mime,i.size FROM album_requests r JOIN album_items i ON i.id=r.item WHERE r.request_id=?',(request_id,)).fetchone()
+            if saved and tuple(saved[1:])!=(name,caption,preset,mime,size):raise AlbumError('Permintaan unggahan berubah.',409)
+            if not saved and used+size>MAX_ALBUM:raise AlbumError('Album sudah penuh. Hubungi pengantin.',413)
             handler.connection.settimeout(90);head=handler.rfile.read(min(32,size))
             if not valid_media(mime,head):raise AlbumError('Isi file tidak sesuai format foto atau video.',415)
             item=secrets.token_hex(16);tmp=None;target=self.directory/(item+exts[mime])
@@ -220,14 +234,11 @@ class Album:
                         if not chunk:raise AlbumError('Unggahan terputus. Silakan ulangi.')
                         f.write(chunk);remaining-=len(chunk)
                     f.flush();os.fsync(f.fileno())
-                # Bound name/filter metadata; never use client filenames on disk.
-                from urllib.parse import unquote
-                name=unquote(handler.headers.get('X-Album-Name','Tamu'))[:80].strip() or 'Tamu'
-                caption=unquote(handler.headers.get('X-Album-Caption',''))[:300].strip()
-                preset=handler.headers.get('X-Album-Filter',config['filter'])
-                if preset not in FILTERS:raise AlbumError('Filter tidak valid.')
+                if saved:return {'ok':True,'id':saved[0],'thumbnailKey':self.thumbnail_key(saved[0])}
                 os.replace(tmp,target)
-                with self.db.connect() as c:c.execute('INSERT INTO album_items VALUES(?,?,?,?,?,?,?,0)',(item,name,caption,preset,mime,size,stamp()))
+                with self.db.connect() as c:
+                    c.execute('INSERT INTO album_items VALUES(?,?,?,?,?,?,?,0)',(item,name,caption,preset,mime,size,stamp()))
+                    c.execute('INSERT INTO album_requests VALUES(?,?)',(request_id,item))
             except Exception:
                 target.unlink(missing_ok=True);raise
             finally:
