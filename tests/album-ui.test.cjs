@@ -1,11 +1,11 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs');
 const source=fs.readFileSync('dist/album.js','utf8'),tick=()=>new Promise(setImmediate);
-function harness(){
+function harness({lightroom=[]}={}){
  const nodes={},revoked=[],queued=[],timers=[],shared=[],events={},saves=[];let queueOptions;
  const make=()=>({hidden:false,disabled:false,value:'',textContent:'',style:{},attributes:{},childElementCount:0,classList:{toggle(){},add(){},remove(){}},setCustomValidity(v){this.validationMessage=v;},reportValidity(){},getBoundingClientRect:()=>({width:360,height:480}),focus(){this.focused=true;},showModal(){this.open=true;},close(){this.open=false;this.listeners?.close?.();},getAttribute(k){return this[k]??null;},setAttribute(k,v){this.attributes[k]=v;},removeAttribute(k){delete this[k];},pause(){},click(){this.clicked=true;},addEventListener(name,fn){(this.listeners??={})[name]=fn;},querySelectorAll(){return [];}});
  const document={body:make(),hidden:false,addEventListener(){},querySelector:s=>nodes[s]??=make(),querySelectorAll:s=>s==='[data-filter]'?['original','film','warm','mono','dazz'].map(filter=>Object.assign(nodes[filter]??=make(),{dataset:{filter}})):s==='[data-story-overlay]'?['celebration','monogram','none'].map(storyOverlay=>Object.assign(nodes[storyOverlay]??=make(),{dataset:{storyOverlay}})):[]};
  const config={title:'Reva & Cesar',count:0,uploadsOpen:true,revealed:true,filter:'film',storage:'s3'};
- const context={TemuAlbumLoading:require('../dist/album-loading.js'),document,window:{matchMedia:()=>({matches:false}),addEventListener:(name,fn)=>events[name]=fn},navigator:{canShare:()=>true,share:async value=>shared.push(value)},setTimeout(fn,ms){timers.push({fn,ms});},location:{hash:'',pathname:'/album'},history:{replaceState(){}},fetch:async()=>({ok:true,json:async()=>config,blob:async()=>new Blob(['original bytes'])}),URL:{createObjectURL:()=> 'blob:moment',revokeObjectURL:u=>revoked.push(u)},URLSearchParams,TemuAlbumPhoto:{story:async()=>new Blob(['story'],{type:'image/png'}),thumbnail:async()=>new Blob(['thumbnail'],{type:'image/jpeg'})},TemuAlbumUpload:require('../dist/album-upload.js'),TemuAlbumQueue:{create(options){queueOptions=options;return {resume:async()=>{},enqueue:async job=>queued.push(job),retry:async()=>{},discard:async()=>{}};}},crypto:require('node:crypto').webcrypto,AbortController,sessionStorage:{getItem(){return null;},removeItem(){}},setInterval(){},Date,AbortSignal,Blob,confirm:()=>true};
+ const context={TemuAlbumLoading:require('../dist/album-loading.js'),document,window:{matchMedia:()=>({matches:false}),addEventListener:(name,fn)=>events[name]=fn},navigator:{canShare:()=>true,share:async value=>shared.push(value)},setTimeout(fn,ms){timers.push({fn,ms});},location:{hash:'',pathname:'/album'},history:{replaceState(){}},fetch:async()=>({ok:true,json:async()=>config,blob:async()=>new Blob(['original bytes'])}),URL:{createObjectURL:()=> 'blob:moment',revokeObjectURL:u=>revoked.push(u)},URLSearchParams,TemuAlbumPresets:{load:async()=>lightroom,has:id=>lightroom.some(p=>p.id===id),get:id=>lightroom.find(p=>p.id===id)},TemuAlbumPhoto:{preview:async()=>new Blob(['filtered preview'],{type:'image/png'}),story:async()=>new Blob(['story'],{type:'image/png'}),thumbnail:async()=>new Blob(['thumbnail'],{type:'image/jpeg'})},TemuAlbumUpload:require('../dist/album-upload.js'),TemuAlbumQueue:{create(options){queueOptions=options;return {resume:async()=>{},enqueue:async job=>queued.push(job),retry:async()=>{},discard:async()=>{}};}},crypto:require('node:crypto').webcrypto,AbortController,sessionStorage:{getItem(){return null;},removeItem(){}},setInterval(){},Date,AbortSignal,Blob,confirm:()=>true};
  vm.runInNewContext(source,context);return {nodes,revoked,queued,timers,shared,events,saves,context,config,get queueOptions(){return queueOptions;},run:s=>vm.runInNewContext(s,context)};
 }
 test('photo and video buttons invoke native capture inputs; canceling retake preserves the previous photo',async()=>{
@@ -84,4 +84,23 @@ test('mirror can be corrected when native camera already mirrors, and retake kee
 test('mirror processing error retains source and preview for correction or retry',async()=>{
  const h=harness();await tick();h.nodes['#guest-name'].value='Guest';h.run('selectFile({name:"selfie.jpg",type:"image/jpeg",size:1024},true)');h.context.TemuAlbumPhoto.mirror=async()=>{throw Error('Mirror unavailable');};
  await h.nodes['#upload-form'].onsubmit({preventDefault(){}});assert.equal(h.queued.length,0);assert.equal(h.run('file.name'),'selfie.jpg');assert.equal(h.run('mirrorPhoto'),true);assert.match(h.nodes['#upload-state'].textContent,/Mirror unavailable/);assert.equal(h.nodes['#take-selfie'].disabled,false);
+});
+
+test('Lightroom selection queues original bytes and preset ID; video returns to Classic',async()=>{
+ const h=harness({lightroom:[{id:'lr-fuji1',name:'Fuji 1',family:'Fuji'}]});await tick();
+ h.run('selectFile({name:"photo.jpg",type:"image/jpeg",size:1024});choosePreset("lr-fuji1")');await tick();
+ assert.equal(h.nodes['#filter-family'].value,'Fuji');assert.equal(h.nodes['#preview-label'].textContent,'PREVIEW · FUJI 1');
+ const original=h.run('file');h.nodes['#guest-name'].value='Guest';await h.nodes['#upload-form'].onsubmit({preventDefault(){}});
+ assert.equal(h.queued[0].blob,original);assert.equal(h.queued[0].filter,'lr-fuji1');
+ h.run('selectFile({name:"clip.mp4",type:"video/mp4",size:1024});choosePreset("lr-fuji1")');
+ assert.equal(h.run('preset'),'original');assert.equal(h.nodes['#filter-family'].value,'Classic');assert.match(h.nodes['#filter-note'].textContent,/tersedia untuk foto/);
+});
+
+test('an old asynchronous preset preview never replaces a newer photo or filter',async()=>{
+ const h=harness({lightroom:[{id:'lr-fuji1',name:'Fuji 1',family:'Fuji'}]});await tick();let finish;
+ h.context.TemuAlbumPhoto.preview=()=>new Promise(resolve=>finish=resolve);
+ h.run('selectFile({name:"first.jpg",type:"image/jpeg",size:1024});choosePreset("lr-fuji1")');await tick();
+ h.run('selectFile({name:"second.jpg",type:"image/jpeg",size:1024});choosePreset("original")');
+ const src=h.nodes['#photo-preview'].src;finish(new Blob(['old filtered image']));await tick();
+ assert.equal(h.nodes['#photo-preview'].src,src);assert.equal(h.run('file.name'),'second.jpg');assert.equal(h.run('preset'),'original');
 });

@@ -7,13 +7,14 @@
   <meta name="robots" content="noindex,nofollow">
   <title>Our shared moments · Reva & Cesar</title>
   <link rel="icon" href="icon.svg">
-  <link rel="stylesheet" href="album.css?v=20261017-3">
+  <link rel="stylesheet" href="album.css?v=20261017-lightroom1">
   <link rel="stylesheet" href="envelope.css?v=20261017-1">
-  <script defer src="album-photo.js?v=20261017-2"></script>
+  <script defer src="album-presets.js?v=20261017-lightroom1"></script>
+  <script defer src="album-photo.js?v=20261017-lightroom1"></script>
   <script defer src="album-queue.js?v=20261016-6"></script>
   <script defer src="album-upload.js?v=20261008-2"></script>
-  <script defer src="album-loading.js?v=20261011-2"></script>
-  <script defer src="album.js?v=20261017-2"></script>
+  <script defer src="album-loading.js?v=20261017-lightroom1"></script>
+  <script defer src="album.js?v=20261017-lightroom1"></script>
 </head>
 <body class="cover-closed">
   <section id="album-cover" class="album-cover envelope-cover" aria-labelledby="cover-title">
@@ -54,7 +55,7 @@
             <button id="mirror-photo" class="mirror-toggle" type="button" aria-pressed="false" aria-label="Mirror foto" hidden>Mirror</button>
             <span id="preview-label" class="preview-label" hidden></span>
           </div></div>
-            <fieldset class="filter-fieldset"><legend>Pilih filter</legend><div id="filters" class="filters" role="group" aria-label="Filter foto dan video">
+            <fieldset class="filter-fieldset"><legend>Pilih filter</legend><label class="filter-collection" for="filter-family"><span class="sr-only">Koleksi filter</span><select id="filter-family" aria-label="Filter collection"><option>Classic</option></select></label><p id="filter-note" class="filter-note" role="status"></p><div id="filters" class="filters" role="group" aria-label="Filter foto dan video">
               <button type="button" data-filter="original" aria-pressed="false"><span class="swatch original"><span>R&C</span></span>Original</button>
               <button type="button" data-filter="film" aria-pressed="false"><span class="swatch film"><span>R&C</span></span>Film</button>
               <button type="button" data-filter="warm" aria-pressed="false"><span class="swatch warm"><span>R&C</span></span>Warm</button>

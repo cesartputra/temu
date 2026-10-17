@@ -60,3 +60,12 @@ test('PNG/WebP and unsupported EXIF use a full-resolution lossless mirror and re
   assert.deepEqual(h.closed[0],['translate',3024,0]);assert.deepEqual(h.closed[1],['scale',-1,1]);assert.equal(h.closed[2],true);assert.equal(h.canvases[0].width,1);
  }
 });
+
+test('Lightroom thumbnails are baked separately; Story filters use full dimensions before overlay',async()=>{
+ const calls=[];
+ // The image helpers use the same browser LUT engine for all sizes.
+ const context={window:{TemuAlbumPresets:{has:()=>false,apply:async(ctx,w,h,id)=>calls.push([w,h,id])}},Image:class{set src(v){this.naturalWidth=2172;this.naturalHeight=724;this.onload();}},document:{createElement(){return {getContext:()=>({drawImage(){}}),toBlob:fn=>fn(new Blob(['pixels']))};}},createImageBitmap:async()=>({width:3024,height:4032,close(){}}),File:class extends Blob{constructor(parts,name,o){super(parts,o);this.name=name;}},URL,Blob};
+ vm.runInNewContext(source,context);const photo=context.window.TemuAlbumPhoto;
+ await photo.thumbnail(new Blob(),'lr-fuji1');await photo.story(new Blob(),'none','none','lr-fuji1');await photo.preview(new Blob(),'lr-fuji1');
+ assert.deepEqual(calls,[[540,720,'lr-fuji1'],[3024,4032,'lr-fuji1'],[720,960,'lr-fuji1']]);
+});

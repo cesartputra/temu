@@ -1,10 +1,10 @@
 'use strict';
 (function(root){
  const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
- function photo(url,alt,classes,detail=false){
+ function photo(url,alt,classes,detail=false,preset=''){
   // Assign src only when the queue grants a slot; native lazy loading alone
   // can start every visible thumbnail at the same time.
-  return `<div class="photo-shell ${detail?'photo-shell-detail':'photo-shell-card'} is-loading" aria-busy="true"><img class="${esc(classes)}" data-photo-src="${esc(url)}" decoding="async" alt="${esc(alt)}"><div class="photo-loading" ${detail?'role="status"':'aria-hidden="true"'}><span class="album-spinner" aria-hidden="true"></span><span>Memuat foto…</span></div><div class="photo-error" hidden><span aria-hidden="true">◎</span><span>Foto belum dapat dimuat.</span>${detail?'<button type="button" class="outline photo-retry">Coba lagi ↻</button>':'<small>Ketuk untuk membuka foto</small>'}</div></div>`;
+  return `<div class="photo-shell ${detail?'photo-shell-detail':'photo-shell-card'} is-loading" aria-busy="true"><img class="${esc(classes)}" ${preset?'crossorigin="anonymous"':''} data-photo-src="${esc(url)}" data-photo-preset="${esc(preset)}" decoding="async" alt="${esc(alt)}"><div class="photo-loading" ${detail?'role="status"':'aria-hidden="true"'}><span class="album-spinner" aria-hidden="true"></span><span>Memuat foto…</span></div><div class="photo-error" hidden><span aria-hidden="true">◎</span><span>Foto belum dapat dimuat.</span>${detail?'<button type="button" class="outline photo-retry">Coba lagi ↻</button>':'<small>Ketuk untuk membuka foto</small>'}</div></div>`;
  }
  function createLoader({maxConcurrent=2,maxRetries=3,timeout=15000,delay=attempt=>750*2**(attempt-1)+Math.random()*250,schedule=setTimeout,cancel=clearTimeout,Observer=root.IntersectionObserver}={}){
   const watchers=new WeakMap(),queue=[];let active=0;
@@ -34,7 +34,7 @@
    const image=shell.querySelector('img'),loader=shell.querySelector('.photo-loading'),error=shell.querySelector('.photo-error'),retry=shell.querySelector('.photo-retry');
    const url=image.getAttribute('data-photo-src');
    const entry={queued:false,active:false,cancelled:false,detail:shell.classList.contains('photo-shell-detail')};entries.push(entry);
-   let generation=0,retries=0,timer=null,retryTimer=null,decoding=false;
+   let generation=0,retries=0,timer=null,retryTimer=null,decoding=false,filteredURL=null;
    function state(value){
     shell.classList.toggle('is-loading',value==='loading');shell.classList.toggle('is-ready',value==='ready');shell.classList.toggle('is-error',value==='error');
     shell.setAttribute('aria-busy',String(value==='loading'));loader.hidden=value!=='loading';error.hidden=value!=='error';
@@ -54,6 +54,13 @@
     try{
      if(!image.naturalWidth)throw Error('Image unavailable');
      if(image.decode)await image.decode();
+     const preset=image.getAttribute('data-photo-preset');
+     if(preset&&root.TemuAlbumPresets){
+      const blob=await root.TemuAlbumPhoto.previewImage(image,preset);
+      if(current!==generation||entry.cancelled)return;
+      if(filteredURL)root.URL.revokeObjectURL(filteredURL);filteredURL=root.URL.createObjectURL(blob);image.src=filteredURL;
+      if(image.decode)await image.decode();
+     }
      if(current===generation&&!entry.cancelled){clearTimer();state('ready');release(entry);}
     }catch{if(current===generation&&!entry.cancelled)failed();}
    }
@@ -73,6 +80,7 @@
    };
    entry.dispose=()=>{
     entry.cancelled=true;generation++;clearTimer();
+    if(filteredURL){root.URL.revokeObjectURL(filteredURL);filteredURL=null;}
     if(retryTimer!==null)cancel(retryTimer);
     image.removeEventListener('load',loaded);image.removeEventListener('error',failed);
     if(retry)retry.removeEventListener('click',manualRetry);

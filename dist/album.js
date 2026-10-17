@@ -1,6 +1,8 @@
 'use strict';
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const presets={original:'none',film:'sepia(.3) saturate(.85) contrast(1.08) brightness(1.03)',warm:'sepia(.45) saturate(1.15) brightness(1.04)',mono:'grayscale(1) contrast(1.1)',dazz:'sepia(.18) saturate(.82) contrast(1.08) brightness(1.06)'};
+const classicFilters=[['original','Original'],['film','Film'],['warm','Warm'],['mono','Black & White'],['dazz','Dazz Cam']].map(([id,name])=>({id,name,family:'Classic'}));
+let lightroomFilters=[],filteredURL,filterVersion=0,filterLoadError='',filterRender=Promise.resolve();
 let info,file,preset='film',previewURL,enqueuing=false,items=[],next=0,loading=false,hasName=false,queueRows=[],mirrorPhoto=false,frontPhoto=false,captureFacing='environment';
 function notice(text,error=false){$('#status').hidden=!error;$('#status').textContent=text;$('#status').classList.toggle('error',error);$('#upload-state').hidden=!text;$('#upload-state').textContent=text;$('#upload-state').classList.toggle('error',error);}
 function captureState(){
@@ -9,7 +11,7 @@ function captureState(){
  $('#discard').hidden=!file;$('#discard').disabled=$('#close-caption').disabled=enqueuing;
  $('#capture-review').hidden=!file;$('#review-capture').hidden=!file;
  $('#review-capture').disabled=$('#retake-capture').disabled=enqueuing;
- for(const button of document.querySelectorAll('[data-filter]'))button.disabled=enqueuing;
+ for(const button of document.querySelectorAll('[data-filter]'))button.disabled=enqueuing;$('#filter-family').disabled=enqueuing;
  $('#mirror-photo').hidden=!file?.type.startsWith('image/');$('#mirror-photo').disabled=enqueuing;$('#mirror-photo').setAttribute('aria-pressed',String(mirrorPhoto));$('#photo-preview').style.transform=mirrorPhoto?'scaleX(-1)':'';
  $('#preview-label').hidden=!file;$('#native-actions').hidden=!!file;
 }
@@ -37,12 +39,45 @@ async function api(path,body){
  let data;try{data=await r.json();}catch{data={error:'Server belum dapat diakses. Silakan coba lagi.'};}
  if(!r.ok){const error=Error(data.error||'Album belum dapat diakses.');error.status=r.status;error.retryAfter=data.retryAfter||Number(r.headers?.get('Retry-After'));throw error;}return data;
 }
-function choosePreset(value){preset=Object.hasOwn(presets,value)?value:'original';for(const button of document.querySelectorAll('[data-filter]'))button.setAttribute('aria-pressed',String(button.dataset.filter===preset));for(const el of [$('#photo-preview'),$('#video-preview')])el.style.filter=presets[preset];$('#preview-label').textContent='PREVIEW · '+({original:'ORIGINAL',film:'FILM',warm:'WARM',mono:'BLACK & WHITE',dazz:'DAZZ CAM'}[preset]);$('#viewfinder').classList.toggle('dazz',preset==='dazz');}
+function filterRecords(){return [...classicFilters,...lightroomFilters];}
+function renderFilters(family){
+ const focused=document.activeElement?.dataset?.filter;
+ const video=file?.type.startsWith('video/'),records=filterRecords(),families=[...new Set(records.map(p=>p.family))];
+ if(video)family='Classic';
+ $('#filter-family').innerHTML=families.map(name=>`<option ${video&&name!=='Classic'?'disabled':''}>${esc(name)}</option>`).join('');$('#filter-family').value=family;
+ $('#filters').innerHTML=records.filter(p=>p.family===family).map(p=>`<button type="button" data-filter="${p.id}" aria-pressed="${p.id===preset}" title="${esc(p.name)}"><span class="swatch ${classicFilters.some(c=>c.id===p.id)?p.id:''}" ${p.swatch?`style="background:linear-gradient(150deg,${p.swatch[0]} 0 60%,${p.swatch[1]} 60%)"`:''}><span>R&amp;C</span></span><span class="filter-name">${esc(p.name)}</span></button>`).join('');
+ if(focused)for(const button of $('#filters').querySelectorAll('[data-filter]'))if(button.dataset.filter===focused)button.focus({preventScroll:true});
+}
+async function loadPresets(){
+ try{lightroomFilters=await TemuAlbumPresets.load();for(const record of lightroomFilters)presets[record.id]='none';filterLoadError='';}
+ catch(error){filterLoadError=error.message;}
+}
+function choosePreset(value){
+ preset=Object.hasOwn(presets,value)?value:'original';
+ if(file?.type.startsWith('video/')&&TemuAlbumPresets.has(preset))preset='original';
+ const record=filterRecords().find(p=>p.id===preset);renderFilters(record.family);
+ for(const el of [$('#photo-preview'),$('#video-preview')])el.style.filter=presets[preset];
+ $('#preview-label').textContent='PREVIEW · '+record.name.toUpperCase();$('#viewfinder').classList.toggle('dazz',preset==='dazz');
+ const current=++filterVersion,captured=file;
+ if(filteredURL){URL.revokeObjectURL(filteredURL);filteredURL=null;}
+ if(captured?.type.startsWith('image/'))$('#photo-preview').src=previewURL;
+ $('#filter-note').textContent=filterLoadError||(captured?.type.startsWith('video/')?'Preset Lightroom tersedia untuk foto. Video memakai koleksi Classic.':'');
+ if(captured?.type.startsWith('image/')&&TemuAlbumPresets.has(preset)){
+  $('#filter-note').textContent='Menerapkan '+record.name+'…';
+  filterRender=filterRender.catch(()=>{}).then(async()=>{
+   if(current!==filterVersion||captured!==file)return;
+   const blob=await TemuAlbumPhoto.preview(captured,preset);
+   if(current!==filterVersion||captured!==file)return;
+   filteredURL=URL.createObjectURL(blob);$('#photo-preview').src=filteredURL;$('#filter-note').textContent='';
+  }).catch(error=>{if(current===filterVersion)$('#filter-note').textContent=error.message;});
+ }
+}
+$('#filter-family').onchange=()=>{if(enqueuing)return;const record=filterRecords().find(p=>p.family===$('#filter-family').value);if(record)choosePreset(record.id);};
 function prettyDate(value){return new Date(value).toLocaleString('id-ID',{dateStyle:'long',timeStyle:'short',timeZone:'Asia/Jakarta'})+' WIB';}
 function applyInfo(data){info=data;$('#count').textContent=data.count;captureState();$('#locked').hidden=data.revealed;$('#release-copy').textContent=data.releaseAt?'Galeri dibuka pada '+prettyDate(data.releaseAt)+'.':'';}
 async function init(){
  $('#album-loading').hidden=false;
- try{const key=new URLSearchParams(location.hash.slice(1)).get('k');const data=key?await api('join',{key}):await api('info');if(key)history.replaceState(null,'',location.pathname);applyInfo(data);choosePreset(data.filter);$('#gate').hidden=true;$('#content').hidden=false;if(!hasName)showPage('name');outbox.resume().catch(e=>notice(e.message,true));resumePending();}
+ try{const key=new URLSearchParams(location.hash.slice(1)).get('k');const data=key?await api('join',{key}):await api('info');if(key)history.replaceState(null,'',location.pathname);applyInfo(data);choosePreset(data.filter);const initial=preset;loadPresets().then(()=>{if(!file&&!enqueuing&&preset===initial)choosePreset(data.filter);else{renderFilters(filterRecords().find(p=>p.id===preset).family);captureState();}});$('#gate').hidden=true;$('#content').hidden=false;if(!hasName)showPage('name');outbox.resume().catch(e=>notice(e.message,true));resumePending();}
  catch(e){$('#gate').hidden=false;$('#content').hidden=true;notice(e.message,true);}finally{$('#album-loading').hidden=true;}
 }
 function selectFile(f,front=false){
@@ -59,7 +94,7 @@ function openCamera(kind,facing='environment'){if(enqueuing||!info?.uploadsOpen)
 for(const kind of ['photo','video']){$('#take-'+kind).onclick=()=>openCamera(kind);$('#native-'+kind).onchange=event=>selectFile(event.target.files[0],kind==='photo'&&captureFacing==='user');}
 $('#take-selfie').onclick=()=>openCamera('photo','user');
 $('#mirror-photo').onclick=()=>{if(enqueuing||!file?.type.startsWith('image/'))return;mirrorPhoto=!mirrorPhoto;captureState();};
-function clearPreview(){file=null;mirrorPhoto=frontPhoto=false;$('#photo-preview').hidden=$('#video-preview').hidden=true;$('#video-preview').pause();for(const media of [$('#photo-preview'),$('#video-preview')])media.removeAttribute('src');$('#placeholder').hidden=false;if(previewURL)URL.revokeObjectURL(previewURL);previewURL=null;captureState();layout();}
+function clearPreview(){filterVersion++;if(filteredURL){URL.revokeObjectURL(filteredURL);filteredURL=null;}$('#filter-note').textContent='';file=null;mirrorPhoto=frontPhoto=false;$('#photo-preview').hidden=$('#video-preview').hidden=true;$('#video-preview').pause();for(const media of [$('#photo-preview'),$('#video-preview')])media.removeAttribute('src');$('#placeholder').hidden=false;if(previewURL)URL.revokeObjectURL(previewURL);previewURL=null;captureState();layout();}
 $('#retake-capture').onclick=$('#discard').onclick=()=>{if(enqueuing)return;$('#caption-dialog').close();openCamera(file?.type.startsWith('video/')?'video':'photo',frontPhoto?'user':'environment');};
 $('#close-caption').onclick=()=>$('#caption-dialog').close();$('#caption-dialog').addEventListener('cancel',event=>{if(enqueuing)event.preventDefault();});$('#review-capture').onclick=()=>{if(file&&!enqueuing)$('#caption-dialog').showModal();};
 $('#filters').onclick=e=>{const button=e.target.closest('[data-filter]');if(button)choosePreset(button.dataset.filter);};
@@ -111,7 +146,7 @@ async function sendQueued(job,save,progress){
   await save({result});
  }
  if(job.blob.type.startsWith('image/')){
-  const thumbnail=await TemuAlbumPhoto.thumbnail(job.blob);
+  const thumbnail=await TemuAlbumPhoto.thumbnail(job.blob,job.filter);
   await TemuAlbumUpload.retry(async()=>{
    const response=await fetch('/api/album/thumbnail/'+result.id,{method:'PUT',headers:{'Content-Type':'image/jpeg','X-Temu-Album':'1','X-Album-Thumbnail-Key':result.thumbnailKey},body:thumbnail,signal:AbortSignal.timeout(15000)});
    if(!response.ok){const error=Error('Foto asli tersimpan, thumbnail belum tersedia. Coba lagi untuk menyiapkan preview.');error.status=response.status;throw error;}
@@ -138,7 +173,7 @@ $('#refresh').onclick=()=>loadGallery(true);$('#more').onclick=()=>loadGallery()
 $('#grid').onclick=event=>{
  const card=event.target.closest('[data-id]');if(!card)return;const item=items.find(x=>x.id===card.dataset.id);if(!item)return;
  const photo=item.mime.startsWith('image/');TemuAlbumLoading.stop($('#moment-detail'));
- $('#moment-detail').innerHTML=`<h2>${esc(item.name)}</h2><p><time>${esc(prettyDate(item.created))}</time></p><p>${esc(item.caption)}</p>${photo?TemuAlbumLoading.photo('/api/album/file/'+item.id,'Momen dari '+item.name,'detail-media filter-'+item.filter,true):`<video class="detail-media filter-${item.filter}" src="/api/album/file/${item.id}?preview=1" controls playsinline preload="metadata"></video>`}<div class="detail-actions"><a class="solid" href="/api/album/file/${item.id}?download=1" download>Unduh file asli ↗</a>${photo?'<button class="outline" id="open-story" type="button">Bagikan ke Story Instagram</button>':''}</div>`;
+ $('#moment-detail').innerHTML=`<h2>${esc(item.name)}</h2><p><time>${esc(prettyDate(item.created))}</time></p><p>${esc(item.caption)}</p>${photo?TemuAlbumLoading.photo('/api/album/file/'+item.id,'Momen dari '+item.name,'detail-media filter-'+item.filter,true,item.filter.startsWith('lr-')?item.filter:''):`<video class="detail-media filter-${item.filter}" src="/api/album/file/${item.id}?preview=1" controls playsinline preload="metadata"></video>`}<div class="detail-actions"><a class="solid" href="/api/album/file/${item.id}?download=1" download>Unduh file asli ↗</a>${photo?'<button class="outline" id="open-story" type="button">Bagikan ke Story Instagram</button>':''}</div>`;
  $('#moment-dialog').showModal();TemuAlbumLoading.watch($('#moment-detail'));
  if(photo)$('#open-story').onclick=()=>openStory(item);
  else{const video=$('#moment-detail video');video.addEventListener('error',()=>{const time=video.currentTime||0;video.src='/api/album/file/'+item.id;video.addEventListener('loadedmetadata',()=>{video.currentTime=time;},{once:true});},{once:true});}

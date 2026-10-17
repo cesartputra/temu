@@ -52,6 +52,15 @@ class AlbumTests(unittest.TestCase):
   self.assertEqual(self.request('/api/album/file/'+identifier+'?download=1')[2],data)
   self.assertEqual(json.loads(self.request('/api/album/items')[2])['items'][0]['filter'],'warm')
   self.assertEqual(len(json.loads(self.request('/api/album/items')[2])['items']),1)
+ def test_lightroom_presets_preserve_originals_and_reject_unknown_or_video_styles(self):
+  self.join(self.config());data=b'\xff\xd8\xff'+b'original-camera-photo'*100+b'\xff\xd9'
+  catalog=json.loads((Path(album.__file__).resolve().parents[1]/'dist/album-presets/catalog.json').read_text())['presets']
+  self.assertEqual(len(catalog),93);self.assertTrue(all(p['id'] in album.FILTERS for p in catalog))
+  preset=catalog[0]['id'];status,_,raw=self.request('/api/album/upload','PUT',data,mime='image/jpeg',headers={'X-Album-Filter':preset})
+  self.assertEqual(status,201);identifier=json.loads(raw)['id'];self.assertEqual(self.request('/api/album/file/'+identifier+'?download=1')[2],data)
+  self.assertEqual(json.loads(self.request('/api/album/items')[2])['items'][0]['filter'],preset)
+  self.assertEqual(self.request('/api/album/upload','PUT',data,mime='image/jpeg',headers={'X-Album-Filter':'lr-not-a-preset'})[0],400)
+  self.assertEqual(self.request('/api/album/upload','PUT',b'\x00\x00\x00\x18ftypmp42'+b'x'*100,mime='video/mp4',headers={'X-Album-Filter':preset})[0],415)
  def test_full_original_download_and_range_for_video(self):
   c=self.config();self.join(c);item,original=self.upload();status,headers,data=self.request('/api/album/file/'+item+'?download=1');self.assertEqual(status,200);self.assertEqual(data,original);self.assertIn('attachment',headers['Content-Disposition'])
   status,headers,data=self.request('/api/album/file/'+item,headers={'Range':'bytes=2-9'});self.assertEqual(status,206);self.assertEqual(data,original[2:10]);self.assertEqual(headers['Content-Range'],f'bytes 2-9/{len(original)}')

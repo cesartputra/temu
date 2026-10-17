@@ -64,3 +64,27 @@ test('markup defers src to the queue and escapes guest text without nesting butt
  const thumb=photo('/image?a=1&b=2','Guest <hello>','moment-photo');assert.match(thumb,/data-photo-src="\/image\?a=1&amp;b=2"/);assert.doesNotMatch(thumb,/\ssrc=/);assert.match(thumb,/Guest &lt;hello&gt;/);assert.doesNotMatch(thumb,/<button/);
  const detail=photo('/image','Guest','detail-media',true);assert.match(detail,/photo-retry/);assert.match(detail,/role="status"/);
 });
+
+test('filtered full photo waits for rendering and releases preview URLs on close',async t=>{
+ const oldPresets=globalThis.TemuAlbumPresets,oldPhoto=globalThis.TemuAlbumPhoto;
+ t.after(()=>{globalThis.TemuAlbumPresets=oldPresets;globalThis.TemuAlbumPhoto=oldPhoto;});
+ let finish;globalThis.TemuAlbumPresets={};globalThis.TemuAlbumPhoto={previewImage:()=>new Promise(resolve=>finish=resolve)};
+ const h=setup(1),entry=h.entries[0];entry.image.attributes['data-photo-preset']='lr-fuji1';
+ const loading=entry.succeed();await tick();assert.equal(entry.classes.has('is-ready'),false);
+ finish(new Blob(['filtered']));await loading;assert.match(entry.image.attributes.src,/^blob:/);assert.equal(entry.classes.has('is-ready'),true);
+ h.api.stop(h.root);assert.equal(entry.image.attributes.src,undefined);
+});
+
+test('closing a photo during filter processing discards the late result',async t=>{
+ const oldPresets=globalThis.TemuAlbumPresets,oldPhoto=globalThis.TemuAlbumPhoto;
+ t.after(()=>{globalThis.TemuAlbumPresets=oldPresets;globalThis.TemuAlbumPhoto=oldPhoto;});
+ let finish;globalThis.TemuAlbumPresets={};globalThis.TemuAlbumPhoto={previewImage:()=>new Promise(resolve=>finish=resolve)};
+ const h=setup(1),entry=h.entries[0];entry.image.attributes['data-photo-preset']='lr-fuji1';
+ const loading=entry.succeed();await tick();h.api.stop(h.root);finish(new Blob(['late']));await loading;
+ assert.equal(entry.image.attributes.src,undefined);assert.equal(entry.classes.has('is-ready'),false);
+});
+
+test('filtered originals request CORS access before S3 redirects so the canvas stays readable',()=>{
+ assert.match(photo('/api/album/file/id','Photo','detail-media',true,'lr-fuji1'),/crossorigin="anonymous"/);
+ assert.doesNotMatch(photo('/api/album/file/id?thumb=1','Photo','moment-photo'),/crossorigin=/);
+});

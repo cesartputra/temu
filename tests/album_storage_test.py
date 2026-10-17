@@ -50,6 +50,14 @@ class UploadCases:
         self.assertEqual(self.store.files[final][0],PHOTO)
         status,headers,_=self.raw('/api/album/file/'+t['id']);self.assertEqual(status,307);self.assertIn('/media/',headers['Location'])
         self.assertEqual(self.request('/api/album/upload','PUT',PHOTO,mime='image/jpeg')[0],409)
+    def test_lightroom_style_survives_presigned_upload_and_video_style_is_rejected(self):
+        self.join(self.config());body={'name':'Guest','caption':'','mime':'image/jpeg','size':len(PHOTO),'filter':'lr-fuji1'}
+        status,_,raw=self.ticket(body);self.assertEqual(status,200);ticket=json.loads(raw);self.stage(ticket)
+        self.assertEqual(self.finish_ticket(ticket)[0],201);self.assertEqual(json.loads(self.request('/api/album/items')[2])['items'][0]['filter'],'lr-fuji1')
+        with self.db_for_media.connect() as c:key=c.execute('SELECT object_key FROM album_objects WHERE id=?',(ticket['id'],)).fetchone()[0]
+        self.assertEqual(self.store.files[key][0],PHOTO)
+        self.assertEqual(self.ticket({**body,'mime':'video/mp4'})[0],415)
+        self.assertEqual(self.ticket({**body,'filter':'lr-unknown'})[0],415)
     def test_wrong_size_magic_token_or_unfinished_object_never_enters_gallery(self):
         t=self.start();self.assertEqual(self.finish_ticket(t)[0],200)
         self.assertEqual(self.request('/api/album/uploads/'+t['id']+'/complete','POST',{'token':'wrong'})[0],403)

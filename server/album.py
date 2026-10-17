@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 from http.cookies import SimpleCookie
 
-FILTERS={'original','film','warm','mono','dazz'}
+FILTERS={'original','film','warm','mono','dazz'} | {preset['id'] for preset in json.loads((Path(__file__).resolve().parents[1]/'dist/album-presets/catalog.json').read_text())['presets']}
 EXTENSIONS={'image/jpeg':'.jpg','image/png':'.png','image/webp':'.webp','video/mp4':'.mp4','video/quicktime':'.mov','video/webm':'.webm'}
 MAX_FILE=100*1024*1024
 MAX_ALBUM=int(float(os.environ.get('TEMU_ALBUM_MAX_GB','2'))*1024*1024*1024)
@@ -145,6 +145,7 @@ class Album:
         if not isinstance(request_id,str) or not re.fullmatch(r'[a-f0-9]{32}',request_id):raise AlbumError('Tiket unggahan tidak valid.')
         if type(size) is not int or not 12<=size<=MAX_FILE:raise AlbumError('Batas setiap file adalah 100 MB.',413)
         if mime not in EXTENSIONS or preset not in FILTERS:raise AlbumError('Format atau filter tidak valid.',415)
+        if mime.startswith('video/') and preset.startswith('lr-'):raise AlbumError('Preset Lightroom tersedia untuk foto.',415)
         if not isinstance(name,str) or not 1<=len(name.strip())<=80 or not isinstance(caption,str) or len(caption)>300:raise AlbumError('Nama atau cerita tidak valid.')
         store=self.storage()
         with self.upload_lock,self.db.connect() as c:
@@ -216,6 +217,7 @@ class Album:
         caption=unquote(handler.headers.get('X-Album-Caption',''))[:300].strip()
         preset=handler.headers.get('X-Album-Filter',config['filter'])
         if preset not in FILTERS:raise AlbumError('Filter tidak valid.')
+        if mime.startswith('video/') and preset.startswith('lr-'):raise AlbumError('Preset Lightroom tersedia untuk foto.',415)
         # Serialized streaming keeps memory bounded and prevents concurrent quota overshoot.
         with self.upload_lock:
             with self.db.connect() as c:

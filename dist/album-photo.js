@@ -105,17 +105,35 @@ window.TemuAlbumPhoto=(()=>{
     }
     ctx.putImageData(pixels,0,0);
   }
-  async function thumbnail(source){
+  async function thumbnail(source,effect='original'){
     const photo=await decode(source);let canvas;
     try{
       const width=photo.naturalWidth||photo.width,height=photo.naturalHeight||photo.height;
       const scale=Math.min(1,720/Math.max(width,height));
       canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(width*scale));canvas.height=Math.max(1,Math.round(height*scale));
-      canvas.getContext('2d').drawImage(photo,0,0,canvas.width,canvas.height);
+      const ctx=canvas.getContext('2d');ctx.drawImage(photo,0,0,canvas.width,canvas.height);
+      if(effect.startsWith('lr-')&&window.TemuAlbumPresets)await window.TemuAlbumPresets.apply(ctx,canvas.width,canvas.height,effect);
       const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.8));
       if(!blob||blob.size>512*1024)throw Error('Pratinjau foto belum dapat dibuat.');
       return blob;
     }finally{photo.close?.();if(canvas)canvas.width=canvas.height=1;}
+  }
+  async function previewImage(photo,effect,maxEdge=1440){
+    const width=photo.naturalWidth||photo.width,height=photo.naturalHeight||photo.height;
+    if(!width||!height)throw Error('Foto belum dapat dibaca.');
+    const scale=Math.min(1,maxEdge/Math.max(width,height)),canvas=document.createElement('canvas');
+    try{
+      canvas.width=Math.max(1,Math.round(width*scale));canvas.height=Math.max(1,Math.round(height*scale));
+      const ctx=canvas.getContext('2d');ctx.drawImage(photo,0,0,canvas.width,canvas.height);
+      await window.TemuAlbumPresets.apply(ctx,canvas.width,canvas.height,effect);
+      const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
+      if(!blob)throw Error('Pratinjau filter belum dapat dibuat.');
+      return blob;
+    }finally{canvas.width=canvas.height=1;}
+  }
+  async function preview(source,effect){
+    const photo=await decode(source);
+    try{return await previewImage(photo,effect,960);}finally{photo.close?.();}
   }
   async function story(source,filter='none',style='celebration',effect=''){
     const art=await overlay(style),photo=await decode(source);let canvas;
@@ -130,6 +148,7 @@ window.TemuAlbumPhoto=(()=>{
       ctx.drawImage(photo,0,0,width,height);
       if(nativeFilter)ctx.filter='none';else if(filter!=='none')filterPixels(ctx,width,height,filter);
       if(effect==='dazz')dazzEffect(ctx,width,height);
+      if(effect.startsWith('lr-')&&window.TemuAlbumPresets)await window.TemuAlbumPresets.apply(ctx,width,height,effect);
       if(art){const box=placement(width,height,art.naturalWidth/art.naturalHeight);ctx.drawImage(art,box.x,box.y,box.width,box.height);}
       // PNG is lossless; original bytes remain untouched in the album.
       const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
@@ -137,5 +156,5 @@ window.TemuAlbumPhoto=(()=>{
       return new File([blob],'reva-cesar-story.png',{type:'image/png'});
     }finally{photo.close?.();if(canvas)canvas.width=canvas.height=1;}
   }
-  return {overlay,placement,story,thumbnail,mirror,assetURL};
+  return {overlay,placement,story,thumbnail,preview,previewImage,mirror,assetURL};
 })();
