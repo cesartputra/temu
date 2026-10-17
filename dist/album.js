@@ -53,7 +53,6 @@ function selectFile(f){
  for(const media of [$('#photo-preview'),$('#video-preview')])media.removeAttribute('src');
  const media=photo?$('#photo-preview'):$('#video-preview');media.src=previewURL;media.onload=media.onloadedmetadata=layout;
  $('#placeholder').hidden=true;captureState();choosePreset(preset);layout();notice('');
- if(!$('#caption-dialog').open)$('#caption-dialog').showModal();
 }
 function openCamera(kind){if(enqueuing||!info?.uploadsOpen)return;const input=$('#native-'+kind);input.value='';input.click();}
 for(const kind of ['photo','video']){$('#take-'+kind).onclick=()=>openCamera(kind);$('#native-'+kind).onchange=event=>selectFile(event.target.files[0]);}
@@ -155,7 +154,7 @@ async function prepareStory(){
  try{const result=await TemuAlbumPhoto.story(storySource,presets[storyItem.filter]||'none',storyOverlay,storyItem.filter);if(current!==storyVersion)return;
   storyFile=result;if(storyURL)URL.revokeObjectURL(storyURL);storyURL=URL.createObjectURL(result);$('#story-preview').src=storyURL;$('#story-preview').hidden=false;
   $('#download-story').href=storyURL;$('#download-story').hidden=false;
-  const canShare=!!navigator.share&&!!navigator.canShare?.({files:[result]});$('#share-story').disabled=!canShare;$('#story-status').textContent=canShare?'Story 9:16 siap. Pilih Instagram dari menu berbagi HP.':'Berbagi file tidak tersedia di browser ini. Unduh Story lalu buka Instagram.';
+  const canShare=!!navigator.share&&!!navigator.canShare?.({files:[result]});$('#share-story').disabled=!canShare;$('#story-status').textContent=canShare?'Foto dengan rasio asli siap. Pilih Instagram dari menu berbagi HP.':'Berbagi file tidak tersedia di browser ini. Unduh Story lalu buka Instagram.';
  }catch(e){if(current===storyVersion)$('#story-status').textContent=e.message;}finally{if(current===storyVersion){storyBusy=false;for(const button of document.querySelectorAll('[data-story-overlay]'))button.disabled=false;}}
 }
 $('#story-overlays').onclick=event=>{const button=event.target.closest('[data-story-overlay]');if(!button||storyBusy||!storySource)return;storyOverlay=button.dataset.storyOverlay;prepareStory();};

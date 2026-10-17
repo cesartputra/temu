@@ -7,12 +7,12 @@
   <meta name="robots" content="noindex,nofollow">
   <title>Our shared moments · Reva & Cesar</title>
   <link rel="icon" href="icon.svg">
-  <link rel="stylesheet" href="album.css?v=20261016-6">
-  <script defer src="album-photo.js?v=20261016-6"></script>
+  <link rel="stylesheet" href="album.css?v=20261017-1">
+  <script defer src="album-photo.js?v=20261017-1"></script>
   <script defer src="album-queue.js?v=20261016-6"></script>
   <script defer src="album-upload.js?v=20261008-2"></script>
   <script defer src="album-loading.js?v=20261011-2"></script>
-  <script defer src="album.js?v=20261016-6"></script>
+  <script defer src="album.js?v=20261017-1"></script>
 </head>
 <body class="cover-closed">
   <section id="album-cover" class="album-cover" aria-labelledby="cover-title">
@@ -63,7 +63,7 @@
             <input id="native-photo" type="file" accept="image/*" capture="environment" hidden>
             <input id="native-video" type="file" accept="video/*" capture="environment" hidden>
             <div id="native-actions" class="native-capture-actions"><button id="take-photo" class="solid" type="button">Ambil foto</button><button id="take-video" class="outline" type="button">Rekam video</button></div>
-            <div id="capture-review" class="capture-review" hidden><button id="retake-capture" class="outline" type="button">Ambil ulang</button><button id="review-capture" class="solid" type="button" hidden>Bagikan momen ini ↗</button></div>
+            <div id="capture-review" class="capture-review" hidden><button id="retake-capture" class="outline" type="button">Ambil ulang</button><button id="review-capture" class="solid" type="button" hidden>Bagikan ke album ↗</button></div>
             <p id="camera-status" class="camera-status" role="status"></p>
           </div>
         </div>
@@ -90,10 +90,10 @@
     </form>
   </dialog>
   <dialog id="moment-dialog" aria-label="Detail momen"><button id="close-dialog" class="icon-button dialog-close" type="button" aria-label="Tutup momen"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button><div id="moment-detail"></div></dialog>
-  <dialog id="story-dialog" aria-labelledby="story-title"><button id="close-story" class="icon-button dialog-close" type="button" aria-label="Tutup Story"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  <dialog id="story-dialog" aria-labelledby="story-title"><div class="story-dialog-header"><button id="close-story" class="icon-button dialog-close" type="button" aria-label="Tutup Story"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
     <div class="story-card"><span class="eyebrow">YOUR MOMENT, YOUR STORY</span><h2 id="story-title">Bagikan ke<br><em>Instagram Story.</em></h2>
       <fieldset class="filter-fieldset"><legend>Pilih overlay Story</legend><div id="story-overlays" class="overlays" role="group" aria-label="Overlay Instagram Story"><button type="button" data-story-overlay="celebration" aria-pressed="true">Celebration</button><button type="button" data-story-overlay="monogram" aria-pressed="false">Monogram</button><button type="button" data-story-overlay="none" aria-pressed="false">No overlay</button></div></fieldset>
-      <div class="story-preview"><img id="story-preview" alt="Pratinjau Instagram Story 9:16" hidden></div><p id="story-status" class="small" role="status">Menyiapkan foto asli…</p>
+      <div class="story-preview"><img id="story-preview" alt="Pratinjau foto untuk Instagram" hidden></div><p id="story-status" class="small" role="status">Menyiapkan foto asli…</p>
       <button id="share-story" class="solid full" type="button" disabled>Bagikan ke Instagram</button><a id="download-story" class="outline full" hidden download="reva-cesar-story.png">Unduh Story</a><p class="small">Pilih Instagram dan Story jika tersedia di menu berbagi HP. Kamu tetap menentukan kapan mempostingnya.</p>
     </div>
   </dialog>

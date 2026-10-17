@@ -9,12 +9,12 @@ function harness({width=3024,height=4032,failEncode=false,failAsset=false,native
  const context={window:{},Image:Artwork,document,createImageBitmap:async()=>({width,height,close:()=>closed.push(true)}),File:class extends Blob{constructor(parts,name,options){super(parts,options);this.name=name;}},URL,Blob};vm.runInNewContext(source,context);
  return {photo:context.window.TemuAlbumPhoto,draws,canvases,closed,ctx};
 }
-test('Story export uses a 9:16 lossless PNG with every original photo pixel and centered overlay',async()=>{
- for(const [width,height] of [[3024,4032],[4032,3024],[720,1280]]){
+test('Story export preserves original dimensions and positions overlay at the bottom center',async()=>{
+ for(const [width,height] of [[3024,4032],[4032,3024],[720,1280],[2000,500]]){
   const h=harness({width,height}),result=await h.photo.story(new Blob(['original']),'sepia(.3)','celebration');
-  const size=h.canvases[0].encoded;assert.equal(size.width/size.height,9/16);assert.equal(size.type,'image/png');assert.equal(size.quality,undefined);assert.equal(result.type,'image/png');
-  assert.deepEqual(h.draws[0].box,[(size.width-width)/2,(size.height-height)/2,width,height]);assert.equal(h.draws[0].filter,'sepia(.3)');
-  const [x,y,w,hgt]=h.draws[1].box;assert.ok(Math.abs(x+w/2-size.width/2)<1e-8);assert.ok(Math.abs(y+hgt/2-size.height/2)<1e-8);assert.equal(h.draws[1].filter,'none');assert.equal(h.closed.length,1);assert.equal(h.canvases[0].width,1);
+  const size=h.canvases[0].encoded;assert.equal(size.width,width);assert.equal(size.height,height);assert.equal(size.type,'image/png');assert.equal(size.quality,undefined);assert.equal(result.type,'image/png');
+  assert.deepEqual(h.draws[0].box,[0,0,width,height]);assert.equal(h.draws[0].filter,'sepia(.3)');
+  const [x,y,w,hgt]=h.draws[1].box;assert.ok(Math.abs(x+w/2-size.width/2)<1e-8);assert.ok(Math.abs(y+hgt-size.height)<1e-8);assert.ok(hgt<=height*.4+1e-8);assert.equal(h.draws[1].filter,'none');assert.equal(h.closed.length,1);assert.equal(h.canvases[0].width,1);
  }
 });
 test('monogram and no overlay are available only for Story rendering',async()=>{

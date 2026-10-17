@@ -14,6 +14,12 @@ test('photo and video buttons invoke native capture inputs; canceling retake pre
  h.nodes['#native-photo'].onchange({target:{files:[]}});assert.equal(h.run('file.name'),'original.jpg');h.nodes['#take-video'].onclick();assert.equal(h.nodes['#native-video'].clicked,true);
  const html=fs.readFileSync('dist/album.html','utf8');assert.match(html,/id="native-photo"[^>]*accept="image\/\*" capture="environment"/);assert.match(html,/id="native-video"[^>]*accept="video\/\*" capture="environment"/);assert.doesNotMatch(html,/camera-live|album-camera\.js|data-overlay=/);
 });
+test('capture shows preview first; only the share button opens the optional caption',async()=>{
+ const h=harness();await tick();h.run('selectFile({name:"photo.jpg",type:"image/jpeg",size:1024})');
+ assert.equal(h.nodes['#photo-preview'].hidden,false);assert.equal(h.nodes['#capture-review'].hidden,false);assert.equal(h.nodes['#review-capture'].hidden,false);assert.notEqual(h.nodes['#caption-dialog'].open,true);assert.equal(h.queued.length,0);
+ h.nodes['#review-capture'].onclick();assert.equal(h.nodes['#caption-dialog'].open,true);h.nodes['#close-caption'].onclick();assert.equal(h.run('file.name'),'photo.jpg');
+ h.run('selectFile({name:"clip.mp4",type:"video/mp4",size:1024})');assert.notEqual(h.nodes['#caption-dialog'].open,true);assert.equal(h.nodes['#video-preview'].hidden,false);
+});
 test('enqueue stores original file and selected metadata, closes the dialog and permits the next capture during upload',async()=>{
  const h=harness();await tick();h.nodes['#guest-name'].value='Bayu';h.context.document.querySelector('#caption').value='Hello';h.run('selectFile({name:"original.jpg",type:"image/jpeg",size:1024})');const original=h.run('file');
  await h.nodes['#upload-form'].onsubmit({preventDefault(){}});assert.equal(h.queued[0].blob,original);assert.equal(h.queued[0].filter,'film');assert.equal(h.queued[0].caption,'Hello');assert.match(h.queued[0].id,/^[a-f0-9]{32}$/);assert.equal(h.run('file'),null);assert.equal(h.nodes['#caption-dialog'].open,false);

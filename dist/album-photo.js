@@ -12,15 +12,9 @@ window.TemuAlbumPhoto=(()=>{
     });
     return artworks[style];
   }
-  function storySize(width,height){
-    const unit=Math.ceil(Math.max(width/9,height/16));
-    const size={width:unit*9,height:unit*16};
-    if(size.width*size.height>40000000||Math.max(size.width,size.height)>8192)throw Error('Foto terlalu besar untuk membuat Story di HP ini tanpa menurunkan resolusi. Unduh file asli untuk membagikannya melalui Instagram.');
-    return size;
-  }
   function placement(width,height,ratio){
-    const w=width*.88,h=w/ratio;
-    return {x:(width-w)/2,y:(height-h)/2,width:w,height:h};
+    const w=Math.min(width*.88,height*.4*ratio),h=w/ratio;
+    return {x:(width-w)/2,y:height-h,width:w,height:h};
   }
   async function decode(source){
     if(typeof createImageBitmap==='function'){
@@ -79,22 +73,20 @@ window.TemuAlbumPhoto=(()=>{
     try{
       const width=photo.naturalWidth||photo.width,height=photo.naturalHeight||photo.height;
       if(!width||!height)throw Error('Foto belum dapat dibaca. Unduh file asli untuk membagikannya.');
-      const size=storySize(width,height);
-      canvas=document.createElement('canvas');canvas.width=size.width;canvas.height=size.height;
+      if(width*height>40000000||Math.max(width,height)>8192)throw Error('Foto terlalu besar untuk membuat Story di HP ini tanpa menurunkan resolusi. Unduh file asli untuk membagikannya melalui Instagram.');
+      canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
       const ctx=canvas.getContext('2d');if(!ctx)throw Error('Story belum dapat dibuat. Unduh file asli.');
-      // Keep every source pixel: fit the original without cropping or resizing.
-      const x=(size.width-width)/2,y=(size.height-height)/2;
-      ctx.fillStyle='#121a14';ctx.fillRect(0,0,size.width,size.height);
+      // Keep the original ratio and dimensions, without padding or cropping.
       const nativeFilter='filter' in ctx;if(nativeFilter)ctx.filter=filter;
-      ctx.drawImage(photo,x,y,width,height);
-      if(nativeFilter)ctx.filter='none';else if(filter!=='none')filterPixels(ctx,size.width,size.height,filter);
-      if(effect==='dazz')dazzEffect(ctx,size.width,size.height);
-      if(art){const box=placement(size.width,size.height,art.naturalWidth/art.naturalHeight);ctx.drawImage(art,box.x,box.y,box.width,box.height);}
+      ctx.drawImage(photo,0,0,width,height);
+      if(nativeFilter)ctx.filter='none';else if(filter!=='none')filterPixels(ctx,width,height,filter);
+      if(effect==='dazz')dazzEffect(ctx,width,height);
+      if(art){const box=placement(width,height,art.naturalWidth/art.naturalHeight);ctx.drawImage(art,box.x,box.y,box.width,box.height);}
       // PNG is lossless; original bytes remain untouched in the album.
       const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
       if(!blob)throw Error('Story terlalu besar untuk diproses di HP ini. Unduh file asli.');
       return new File([blob],'reva-cesar-story.png',{type:'image/png'});
     }finally{photo.close?.();if(canvas)canvas.width=canvas.height=1;}
   }
-  return {overlay,placement,storySize,story,thumbnail,assetURL};
+  return {overlay,placement,story,thumbnail,assetURL};
 })();
