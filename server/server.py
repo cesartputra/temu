@@ -224,6 +224,8 @@ class Database:
         hashed=hashlib.sha256((device or '').encode()).hexdigest()
         with self.connect() as c:bound=[row[0] for row in c.execute('SELECT guest FROM invitation_devices WHERE device_hash=?',(hashed,))]
         allowed=any(g['id'] in bound and (guest is None or g['id']==guest) and g.get('akad')=='y' and g['active'] and not g.get('deleted') for g in state['guests'])
+        # Accept old synced settings, but never publish editable gift accounts.
+        for key in ('giftBank','giftAccount','giftName'):event.get('wedding',{}).pop(key,None)
         if not allowed:event.setdefault('wedding',{})['ceremonyTime']='Family Only'
         return {key:event.get(key,{} if key=='wedding' else '') for key in ('name','date','wedding')}
     def invite_signature(self,c,event,guest):

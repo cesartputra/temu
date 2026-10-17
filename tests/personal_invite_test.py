@@ -109,7 +109,10 @@ class PersonalInvitationTests(unittest.TestCase):
   with self.db.connect() as c:c.execute('UPDATE events SET state=?',(json.dumps(state),))
   link=self.db.guest_link('wedding','g');info=self.post('/api/invite/guest',link)
   with self.opener.open(self.origin+'/api/invite/public?g=g') as response:details=json.load(response)['event']['wedding']
-  self.assertEqual(details['ceremonyTime'],'Family Only');self.assertEqual(details['giftAccount'],'00123')
+  self.assertEqual(details['ceremonyTime'],'Family Only');self.assertTrue(all(key not in details for key in ('giftBank','giftAccount','giftName')))
+  with self.opener.open(self.origin+'/invitation2?open=1') as response:html=response.read().decode()
+  for value in ['4380170260','Revalina Vikasturi','1230010313163','Cesar Tribuana Putra']:self.assertIn(value,html)
+  self.assertNotIn('00123',html);self.assertNotIn('Bank Uji',html)
   with urllib.request.urlopen(self.origin+info['guest']['calendarPath']) as response:calendar=response.read().decode()
   self.assertNotIn('SUMMARY:Akad',calendar);self.assertIn('DTSTART:20261121T113000Z',calendar)
   with self.assertRaises(urllib.error.HTTPError) as error:urllib.request.urlopen(self.origin+info['guest']['calendarPath']+'tampered')

@@ -77,8 +77,8 @@ $('#open-personal').addEventListener('click',async()=>{
   // Start sound in the tap handler so browsers can authorize playback.
   music.src='/api/invite/public-media/song.mp3';playMusic();
   const video=$('#hero-video');video.src='/api/invite/public-media/film.mp4';video.play().catch(()=>{});
-  $('#guest-cover').classList.add('is-opening');
-  if(!reducedMotion.matches)await new Promise(resolve=>setTimeout(resolve,420));
+  $('#guest-cover').classList.add('opening');
+  if(!reducedMotion.matches)await new Promise(resolve=>setTimeout(resolve,1150));
   $('#guest-cover').hidden=true;$('#invitation').hidden=false;
   musicToggle.hidden=false;document.body.classList.add('invitation-open');
   window.scrollTo(0,0);$('#invitation').focus({preventScroll:true});
@@ -103,7 +103,7 @@ function renderWishes(wishes){
  requestAnimationFrame(()=>wishScroller?.reset());
 }
 async function loadWishes(){try{const response=await fetch('/api/invite/wishes',{cache:'no-store',signal:AbortSignal.timeout(12000)}),data=await response.json();if(!response.ok)throw Error(data.error||'Doa belum dapat dimuat.');renderWishes(data.wishes);}catch(error){wishScroller?.destroy();wishScroller=null;$('#wish-list').classList.remove('has-pages');$('#wish-list').textContent=error.message;}}
-async function loadInvitation(){accessAllowed=false;try{const params=new URLSearchParams(location.hash.slice(1)),guest=params.get('g'),key=params.get('k');if(!guest||!key)throw Error('Undangan ini hanya dapat dibuka melalui tautan unik yang dikirimkan kepada Anda.');personal={guest,key};const info=await invitePost('guest',personal);accessAllowed=true;const response=await fetch('/api/invite/public?g='+encodeURIComponent(personal.guest),{cache:'no-store',signal:AbortSignal.timeout(12000)});const data=await response.json();if(!response.ok||!data.event)throw Error(data.error||'Undangan belum tersedia.');const event=data.event,w=event.wedding||{};const legacy=w.firstName==='Cesar'&&w.secondName==='Revalina',first=legacy?'Reva':w.firstName||'Reva',second=legacy?'Cesar':w.secondName||'Cesar';$('#first-name').textContent=first;$('#second-name').textContent=second;$('#signature').textContent=first+' & '+second;$('#closing-names').textContent=first+' & '+second;$('#cover-date').textContent=dateText(event.date,{day:'numeric',month:'long',year:'numeric'});$('#event-date').textContent=dateText(event.date,{weekday:'long',day:'numeric',month:'long',year:'numeric'});$('#venue').textContent=w.venue||'Tempat akan diinformasikan';$('#address').textContent=w.address||'Bandung, Jawa Barat';setupSchedule(info.guest,w);setupGift(w);setupCalendar(event,w,info);const map=safeMap(w.mapsURL);$('#maps-link').hidden=!map;if(map)$('#maps-link').href=map;countdown(event.date);document.title=first+' & '+second+' — Undangan Pernikahan';$('#load-error').hidden=true;showPersonal(info);loadWishes();}catch(error){accessAllowed=false;music.pause();musicToggle.hidden=true;$('#invitation').hidden=true;$('#guest-cover').hidden=true;$('#error-message').textContent=error.message||'Periksa koneksi dan coba lagi.';$('#load-error').hidden=false;}}
+async function loadInvitation(){accessAllowed=false;try{const params=new URLSearchParams(location.hash.slice(1)),guest=params.get('g'),key=params.get('k');if(!guest||!key)throw Error('Undangan ini hanya dapat dibuka melalui tautan unik yang dikirimkan kepada Anda.');personal={guest,key};const info=await invitePost('guest',personal);accessAllowed=true;const response=await fetch('/api/invite/public?g='+encodeURIComponent(personal.guest),{cache:'no-store',signal:AbortSignal.timeout(12000)});const data=await response.json();if(!response.ok||!data.event)throw Error(data.error||'Undangan belum tersedia.');const event=data.event,w=event.wedding||{};const legacy=w.firstName==='Cesar'&&w.secondName==='Revalina',first=legacy?'Reva':w.firstName||'Reva',second=legacy?'Cesar':w.secondName||'Cesar';$('#first-name').textContent=first;$('#second-name').textContent=second;$('#signature').textContent=first+' & '+second;$('#closing-names').textContent=first+' & '+second;$('#cover-date').textContent=dateText(event.date,{day:'numeric',month:'long',year:'numeric'});$('#event-date').textContent=dateText(event.date,{weekday:'long',day:'numeric',month:'long',year:'numeric'});$('#venue').textContent=w.venue||'Tempat akan diinformasikan';$('#address').textContent=w.address||'Bandung, Jawa Barat';setupSchedule(info.guest,w);setupGift();setupCalendar(event,w,info);const map=safeMap(w.mapsURL);$('#maps-link').hidden=!map;if(map)$('#maps-link').href=map;countdown(event.date);document.title=first+' & '+second+' — Undangan Pernikahan';$('#load-error').hidden=true;showPersonal(info);loadWishes();}catch(error){accessAllowed=false;music.pause();musicToggle.hidden=true;$('#invitation').hidden=true;$('#guest-cover').hidden=true;$('#error-message').textContent=error.message||'Periksa koneksi dan coba lagi.';$('#load-error').hidden=false;}}
 $('#retry').addEventListener('click',loadInvitation);loadInvitation();
 
 function setupPageMotion(){
@@ -152,10 +152,14 @@ function setupSchedule(guest,wedding){
  if(guest.akad==='y')show('#ceremony-time',wedding.ceremonyTime||'15.30 WIB - 17.00 WIB');else $('#ceremony-time').textContent='Family Only';
  show('#reception-time',wedding.receptionTime||'18.30 WIB - 20.30 WIB');
 }
-function setupGift(w){
- $('#gift').hidden=![w.giftBank,w.giftAccount,w.giftName].every(value=>typeof value==='string'&&value.trim());
- for(const [selector,key] of [['#gift-bank','giftBank'],['#gift-account','giftAccount'],['#gift-name','giftName']])$(selector).textContent=w[key]||'';
- $('#copy-account').onclick=async()=>{try{await navigator.clipboard.writeText(w.giftAccount);$('#gift-status').textContent='Nomor rekening disalin.';}catch{$('#gift-status').textContent='Pilih dan salin nomor rekening di atas.';}};
+function setupGift(){
+ document.querySelectorAll('[data-copy-account]').forEach(button=>{
+  button.onclick=async()=>{
+   const status=button.nextElementSibling;
+   try{await navigator.clipboard.writeText(button.dataset.copyAccount);status.textContent='Nomor rekening disalin.';}
+   catch{status.textContent='Pilih dan salin nomor rekening di atas.';}
+  };
+ });
 }
 function setupCalendar(event,wedding,info){
  const links=TemuInviteCalendar.links({date:event.date,wedding,akad:info.guest.akad==='y',calendarPath:info.guest.calendarPath,origin:location.origin});
