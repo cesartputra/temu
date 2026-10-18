@@ -35,9 +35,12 @@ $('#name-form').onsubmit=event=>{
 };
 $('#edit-name').onclick=()=>{showPage('name');$('#guest-name').focus();};
 async function api(path,body){
+ const request=async()=>{
  let r;try{r=await fetch('/api/album/'+path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-Temu-Album':'1'},body:body?JSON.stringify(body):undefined,cache:'no-store',signal:AbortSignal.timeout(15000)});}catch(error){error.status=0;throw error;}
  let data;try{data=await r.json();}catch{data={error:'Server belum dapat diakses. Silakan coba lagi.'};}
  if(!r.ok){const error=Error(data.error||'Album belum dapat diakses.');error.status=r.status;error.retryAfter=data.retryAfter||Number(r.headers?.get('Retry-After'));throw error;}return data;
+ };
+ return body?request():TemuAlbumUpload.retry(request,{maxWait:30000});
 }
 function filterRecords(){return [...classicFilters,...lightroomFilters];}
 function renderFilters(family){
@@ -77,7 +80,7 @@ function prettyDate(value){return new Date(value).toLocaleString('id-ID',{dateSt
 function applyInfo(data){info=data;$('#count').textContent=data.count;captureState();$('#locked').hidden=data.revealed;$('#release-copy').textContent=data.releaseAt?'Galeri dibuka pada '+prettyDate(data.releaseAt)+'.':'';}
 async function init(){
  $('#album-loading').hidden=false;
- try{const key=new URLSearchParams(location.hash.slice(1)).get('k');const data=key?await api('join',{key}):await api('info');if(key)history.replaceState(null,'',location.pathname);applyInfo(data);choosePreset(data.filter);const initial=preset;loadPresets().then(()=>{if(!file&&!enqueuing&&preset===initial)choosePreset(data.filter);else{renderFilters(filterRecords().find(p=>p.id===preset).family);captureState();}});$('#gate').hidden=true;$('#content').hidden=false;if(!hasName)showPage('name');outbox.resume().catch(e=>notice(e.message,true));resumePending();}
+ try{const key=new URLSearchParams(location.hash.slice(1)).get('k');const data=key?await TemuAlbumUpload.retry(()=>api('join',{key}),{maxWait:30000}):await api('info');if(key)history.replaceState(null,'',location.pathname);applyInfo(data);choosePreset(data.filter);const initial=preset;loadPresets().then(()=>{if(!file&&!enqueuing&&preset===initial)choosePreset(data.filter);else{renderFilters(filterRecords().find(p=>p.id===preset).family);captureState();}});$('#gate').hidden=true;$('#content').hidden=false;if(!hasName)showPage('name');outbox.resume().catch(e=>notice(e.message,true));resumePending();}
  catch(e){$('#gate').hidden=false;$('#content').hidden=true;notice(e.message,true);}finally{$('#album-loading').hidden=true;}
 }
 function selectFile(f,front=false){
@@ -101,7 +104,7 @@ $('#filters').onclick=e=>{const button=e.target.closest('[data-filter]');if(butt
 $('#retry').onclick=init;
 function tab(gallery){if(!hasName){showPage('name');return;}showPage(gallery?'gallery':'camera');if(gallery)loadGallery(true);}
 $('#tab-capture').onclick=()=>tab(false);$('#tab-gallery').onclick=()=>tab(true);$('#share-first').onclick=$('#share-empty').onclick=()=>tab(false);
-const outbox=TemuAlbumQueue.create({send:sendQueued,onChange:renderQueue,onSaved:()=>{api('info').then(applyInfo).catch(()=>{});if(!$('#gallery').hidden)loadGallery(true);}});
+const outbox=TemuAlbumQueue.create({send:sendQueued,onChange:renderQueue,onSaved:()=>{if(!$('#gallery').hidden)loadGallery(true);else api('info').then(applyInfo).catch(()=>{});}});
 function renderQueue(rows,error){
  queueRows=rows;$('#upload-queue').hidden=!rows.length&&!error;
  $('#queue-summary').textContent=error?error.message:rows.length+' momen dalam antrean'+(rows.some(x=>x.state==='failed')?' · perlu diperiksa':'');
@@ -130,7 +133,7 @@ async function sendQueued(job,save,progress){
   let ticket=job.ticket;
   if(info.storage==='s3'){
    if(job.stage!=='uploaded'){
-    ticket=await TemuAlbumUpload.retry(()=>api('uploads',{requestId:job.id,name:job.name,caption:job.caption,mime:job.blob.type,size:job.blob.size,filter:job.filter}));
+    ticket=await TemuAlbumUpload.retry(()=>api('uploads',{requestId:job.id,name:job.name,caption:job.caption,mime:job.blob.type,size:job.blob.size,filter:job.filter,multipart:true}));
     if(ticket.completed)result=ticket;
     else{
      await save({ticket});

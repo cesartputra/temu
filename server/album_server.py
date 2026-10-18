@@ -30,6 +30,7 @@ def make_album_handler(database,token,proxy_key):
         def authorized(self):return self.safe_host() and hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+token)
         def reply(self,status,payload,cookie=None):
             data=encode(payload).encode();self.send_response(status);self.send_header('Content-Type','application/json; charset=utf-8');self.send_header('Content-Length',str(len(data)));self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff')
+            if status in (429,503) and payload.get('retryAfter'):self.send_header('Retry-After',str(payload['retryAfter']))
             if cookie:self.send_header('Set-Cookie',cookie)
             self.end_headers()
             if self.command!='HEAD':self.wfile.write(data)

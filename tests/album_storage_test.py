@@ -8,7 +8,7 @@ import album,album_storage,migrate_album_s3,album_jobs
 ENV={'TEMU_ALBUM_STORAGE':'s3','TEMU_S3_ENDPOINT':'https://kencana.basic.box.cloudeka.id','TEMU_S3_REGION':'kencana','TEMU_S3_BUCKET':'test-wedding','TEMU_S3_ACCESS_KEY':'test-access','TEMU_S3_SECRET_KEY':'private-test-secret'}
 PHOTO=b'\xff\xd8\xff'+b'photo'*20
 class FakeStore:
-    def __init__(self):self.files={};self.deleted=[];self.fail=False;self.prefix='temu-album/'
+    def __init__(self):self.files={};self.deleted=[];self.fail=False;self.prefix='temu-album/';self.multipart={};self.next_upload=0
     key=album_storage.S3Storage.key
     def presign(self,method,key,**options):return 'https://kencana.basic.box.cloudeka.id/test-wedding/'+key+'?signed='+method
     def inspect(self,key):
@@ -17,6 +17,17 @@ class FakeStore:
     def copy(self,source,target,etag,size,mime):self.files[target]=self.files[source]
     def delete(self,key):self.deleted.append(key);self.files.pop(key,None)
     def put_file(self,key,path,mime):self.files[key]=(Path(path).read_bytes(),mime)
+    def start_multipart(self,key,mime):
+        self.next_upload+=1;identifier=str(self.next_upload);self.multipart[identifier]=[key,mime,None];return identifier
+    def finish_multipart(self,key,identifier,size):
+        if identifier not in self.multipart:return
+        target,mime,data=self.multipart[identifier]
+        if data is None or len(data)!=size:raise album_storage.StorageError('Incomplete upload')
+        self.files[key]=(data,mime);del self.multipart[identifier]
+    def abort_multipart(self,key,identifier):self.multipart.pop(identifier,None)
+    def clean_multipart(self,key):
+        for identifier in list(self.multipart):
+            if self.multipart[identifier][0]==key:self.abort_multipart(key,identifier)
 
 class UploadCases:
     def setUp(self):
@@ -92,6 +103,19 @@ class SplitS3Tests(UploadCases,unittest.TestCase):
     def db_for_media(self):return self.albumdb
 
 class StorageContractTests(unittest.TestCase):
+    def test_presigned_part_binds_upload_session_and_part_number(self):
+        with mock.patch.dict(os.environ,ENV):
+            url=album_storage.S3Storage().presign('PUT','media/test.jpg',mime='image/jpeg',size=300,query=[('uploadId','id/with+symbols'),('partNumber','1')])
+            query=parse_qs(urlsplit(url).query);self.assertEqual(query['uploadId'],['id/with+symbols']);self.assertEqual(query['partNumber'],['1'])
+    def test_multipart_completion_uses_only_metadata_and_requires_one_full_part(self):
+        with mock.patch.dict(os.environ,ENV):
+            store=album_storage.S3Storage()
+            part=b'<ListPartsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Part><PartNumber>1</PartNumber><Size>123</Size><ETag>"'+b'a'*32+b'"</ETag></Part></ListPartsResult>'
+            with mock.patch.object(store,'request',side_effect=[({},part),({},b'<CompleteMultipartUploadResult/>')]) as request:
+                store.finish_multipart('media/test','session',123)
+                self.assertEqual([call.args[0] for call in request.call_args_list],['GET','POST']);self.assertLess(len(request.call_args_list[1].kwargs['body']),200)
+            with mock.patch.object(store,'request',return_value=({},part)),self.assertRaises(album_storage.StorageError):store.finish_multipart('media/test','session',124)
+            with mock.patch.object(store,'request',side_effect=album_storage.StorageError('Object Storage (NoSuchUpload).')):store.finish_multipart('media/test','session',123)
     def test_signed_upload_binds_length_and_mime_without_including_secret(self):
         with mock.patch.dict(os.environ,ENV):
             store=album_storage.S3Storage();url=store.presign('PUT',store.key('incoming','a'*32,'.jpg'),size=300,mime='image/jpeg');query=parse_qs(urlsplit(url).query)

@@ -43,6 +43,16 @@ test('gallery uses only thumbnails and never requests full photo bytes for a mis
  const h=harness();await tick();h.nodes['#media-type'].value='all';h.run('items=[{id:"a",name:"Guest <img>",mime:"image/jpeg",filter:"film",thumbnail:true},{id:"b",name:"Other",mime:"image/jpeg",filter:"original",thumbnail:false}];next=null;renderGallery()');
  const html=h.nodes['#grid'].innerHTML;assert.match(html,/\/a\?thumb=1/);assert.doesNotMatch(html,/file\/b/);assert.match(html,/PREVIEW BELUM TERSEDIA/);assert.match(html,/&lt;img&gt;/);
 });
+test('gallery recovers from a busy API without clearing existing moments; writes are not implicitly replayed',async()=>{
+ const h=harness();await tick();let calls=0;const waits=[];
+ h.context.TemuAlbumUpload={...h.context.TemuAlbumUpload,retry:(task,options)=>require('../dist/album-upload.js').retry(task,{...options,random:()=>0,wait:async ms=>waits.push(ms)})};
+ h.context.fetch=async()=>++calls===1?{ok:false,status:503,headers:{get:()=> '2'},json:async()=>({error:'busy'})}:{ok:true,json:async()=>({items:[{id:'new'}],next:null})};
+ const result=await h.run('api("items?offset=0")');assert.equal(result.items[0].id,'new');assert.equal(calls,2);assert.equal(waits[0],2000);
+ calls=0;h.context.fetch=async()=>{calls++;return {ok:false,status:503,json:async()=>({error:'busy'})};};
+ await assert.rejects(h.run('api("uploads",{name:"Guest"})'),/busy/);assert.equal(calls,1);
+ h.context.fetch=async()=>({ok:false,status:403,json:async()=>({error:'expired'})});
+ await assert.rejects(h.run('api("items")'),/expired/);
+});
 test('detail downloads original file and opens a Story composer with the full original, not the thumbnail',async()=>{
  const h=harness();await tick();h.run('items=[{id:"a",name:"<Guest>",caption:"Line1\\nLine2 <script>",created:"2026-11-21T12:00:00Z",mime:"image/jpeg",filter:"film"}]');
  h.nodes['#grid'].onclick({target:{closest:()=>({dataset:{id:'a'}})}});const html=h.nodes['#moment-detail'].innerHTML;assert.match(html,/file\/a\?download=1/);assert.match(html,/id="open-story"/);assert.match(html,/&lt;script&gt;/);

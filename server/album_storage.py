@@ -1,8 +1,8 @@
 """Private S3 objects with bounded I/O and AWS Signature Version 4.
 
-No credentials or signed URLs are written to logs. Upload URLs target staging
-keys only; final objects are copied by the server and cannot be overwritten by
-reusing a guest's upload URL.
+No credentials or signed URLs are written to logs. New uploads use a single
+multipart part; completing it invalidates the guest's PUT URL. Legacy staging
+uploads are copied to final keys for compatibility with older browser queues.
 """
 import base64, hashlib, hmac, http.client, os, re, ssl, tempfile, shutil, threading, time
 from contextlib import contextmanager
@@ -55,13 +55,13 @@ class S3Storage:
         if kind not in ('incoming','media','thumbnails','previews') or not re.fullmatch(r'[a-f0-9]{32}',identifier) or not re.fullmatch(r'\.[a-z0-9]+|',extension): raise StorageError('Kunci objek tidak valid.')
         return self.prefix+kind+'/'+identifier+extension
     def uri(self,key=''): return '/'+quote(self.bucket+'/'+key,safe='/-_.~')
-    def presign(self,method,key,expires=300,mime=None,size=None,download=None,now=None):
+    def presign(self,method,key,expires=300,mime=None,size=None,download=None,now=None,query=()):
         now=now or datetime.now(timezone.utc);date=now.strftime('%Y%m%d');stamp=now.strftime('%Y%m%dT%H%M%SZ')
         scope=date+'/'+self.region+'/s3/aws4_request';headers={'host':self.host}
         if mime: headers['content-type']=mime
         if size is not None: headers['content-length']=str(size)
         signed=';'.join(sorted(headers));canonical_headers=''.join(k+':'+headers[k]+'\n' for k in sorted(headers))
-        values=[('X-Amz-Algorithm','AWS4-HMAC-SHA256'),('X-Amz-Credential',self.access+'/'+scope),('X-Amz-Date',stamp),('X-Amz-Expires',str(expires)),('X-Amz-SignedHeaders',signed)]
+        values=[*query,('X-Amz-Algorithm','AWS4-HMAC-SHA256'),('X-Amz-Credential',self.access+'/'+scope),('X-Amz-Date',stamp),('X-Amz-Expires',str(expires)),('X-Amz-SignedHeaders',signed)]
         if download: values.append(('response-content-disposition','attachment; filename="'+download+'"'))
         values.append(('response-cache-control','private, no-store')) if method=='GET' else None
         query=query_string(values);canonical='\n'.join((method,self.uri(key),query,canonical_headers,signed,'UNSIGNED-PAYLOAD'))
@@ -125,6 +125,43 @@ class S3Storage:
         headers,_=self.request('HEAD',key)
         _,head=self.request('GET',key,headers={'Range':'bytes=0-31'},limit=32)
         return int(headers.get('content-length','0')),headers.get('content-type','').split(';')[0],headers.get('etag',''),head
+    def start_multipart(self,key,mime):
+        _,data=self.request('POST',key,headers={'Content-Type':mime,'Cache-Control':'private, no-store'},query=[('uploads','')])
+        try:
+            root=ET.fromstring(data);identifier=root.findtext('{*}UploadId')
+            if not identifier or len(identifier)>2048:raise ValueError()
+            return identifier
+        except (ET.ParseError,ValueError):raise StorageError('Sesi Object Storage belum berhasil dibuat.')
+    def finish_multipart(self,key,identifier,size):
+        # HEAD recovers a completed request whose response was lost.
+        try:
+            _,data=self.request('GET',key,query=[('uploadId',identifier)])
+        except StorageError as error:
+            if '(NoSuchUpload)' not in str(error):raise
+            return
+        try:
+            root=ET.fromstring(data);parts=root.findall('{*}Part')
+            if len(parts)!=1 or parts[0].findtext('{*}PartNumber')!='1' or int(parts[0].findtext('{*}Size'))!=size:raise ValueError()
+            etag=parts[0].findtext('{*}ETag')
+            if not etag or not re.fullmatch(r'"?[a-fA-F0-9]{32}"?',etag):raise ValueError()
+            body=ET.Element('CompleteMultipartUpload');part=ET.SubElement(body,'Part')
+            ET.SubElement(part,'PartNumber').text='1';ET.SubElement(part,'ETag').text=etag
+            _,data=self.request('POST',key,body=ET.tostring(body),headers={'Content-Type':'application/xml'},query=[('uploadId',identifier)])
+            if ET.fromstring(data).tag.rsplit('}',1)[-1]!='CompleteMultipartUploadResult':raise ValueError()
+        except (ET.ParseError,ValueError,TypeError):raise StorageError('Bagian unggahan belum lengkap atau ukurannya tidak sesuai.')
+    def abort_multipart(self,key,identifier):
+        try:self.request('DELETE',key,query=[('uploadId',identifier)])
+        except StorageError as error:
+            if '(NoSuchUpload)' not in str(error):raise
+    def clean_multipart(self,key):
+        # Listing the exact ticket key also reaps a create whose response was lost.
+        _,data=self.request('GET',query=[('uploads',''),('prefix',key)])
+        try:
+            root=ET.fromstring(data)
+            for upload in root.findall('{*}Upload'):
+                if upload.findtext('{*}Key')==key:self.abort_multipart(key,upload.findtext('{*}UploadId'))
+            if root.findtext('{*}IsTruncated')=='true':raise StorageError('Pembersihan sesi Object Storage masih berjalan.')
+        except ET.ParseError:raise StorageError('Sesi Object Storage belum dapat dibersihkan.')
     def copy(self,source,target,etag,size,mime):
         if not self.copy_unavailable:
             try:

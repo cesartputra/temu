@@ -15,6 +15,54 @@ class AsyncQueueTests(unittest.TestCase):
         data=json.dumps(body).encode();return type('Request',(),{'headers':{'Content-Length':str(len(data))},'rfile':io.BytesIO(data)})()
     def begin(self,n=0,mime='image/jpeg',data=fixtures.PHOTO):
         return self.a.begin_upload(self.handler({'requestId':format(n,'032x'),'name':'Guest '+str(n),'mime':mime,'size':len(data),'filter':'original'}),self.config)
+    def multipart(self,n=0,data=fixtures.PHOTO):
+        ticket=self.a.begin_upload(self.handler({'requestId':format(n,'032x'),'name':'Guest','mime':'image/jpeg','size':len(data),'multipart':True}),self.config)
+        with self.db.connect() as c:identifier=c.execute('SELECT upload_id FROM album_multipart WHERE id=?',(ticket['id'],)).fetchone()[0]
+        if identifier in self.store.multipart:self.store.multipart[identifier][2]=data
+        return ticket,identifier
+    def test_multipart_publishes_without_copy_and_survives_lost_completion_response(self):
+        ticket,identifier=self.multipart();again,_=self.multipart();self.assertEqual(ticket['id'],again['id']);self.assertEqual(self.store.next_upload,1)
+        self.a.complete_upload(self.handler({'token':ticket['token']}),ticket['id'],self.config)
+        finish=self.store.finish_multipart
+        def lost(*args):finish(*args);raise fixtures.album_storage.StorageError('response lost')
+        with mock.patch.object(self.store,'finish_multipart',side_effect=lost),mock.patch.object(self.store,'copy',side_effect=AssertionError('must not copy')):
+            self.assertTrue(album_jobs.process_next(self.a))
+        self.assertNotIn(identifier,self.store.multipart)
+        with self.db.connect() as c:c.execute('UPDATE album_jobs SET ready=0')
+        with mock.patch.object(self.store,'copy',side_effect=AssertionError('must not copy')):self.assertTrue(album_jobs.process_next(self.a))
+        key=self.store.key('media',ticket['id'],'.jpg');self.assertEqual(self.store.files[key][0],fixtures.PHOTO);self.assertEqual(self.a.public(self.config)['count'],1)
+        with self.db.connect() as c:c.execute('UPDATE album_uploads SET expires=0')
+        self.a.clean_uploads(self.store);self.assertIn(key,self.store.files)
+        saved=self.a.begin_upload(self.handler({'requestId':format(0,'032x'),'name':'Guest','mime':'image/jpeg','size':len(fixtures.PHOTO),'multipart':True}),self.config);self.assertTrue(saved['completed'])
+    def test_multipart_invalid_or_cancelled_upload_is_reaped_and_not_published(self):
+        ticket,identifier=self.multipart(data=b'<script>'+b'x'*80)
+        self.a.complete_upload(self.handler({'token':ticket['token']}),ticket['id'],self.config);album_jobs.process_next(self.a)
+        self.assertEqual(self.a.public(self.config)['count'],0)
+        pending,_=self.multipart(1);self.a.cancel_upload(self.handler({'token':pending['token']}),pending['id'])
+        with self.db.connect() as c:c.execute('UPDATE album_uploads SET expires=0')
+        self.a.clean_uploads(self.store);self.assertEqual(self.store.files,{});self.assertEqual(self.store.multipart,{})
+    def test_cancel_during_multipart_create_aborts_the_new_session(self):
+        create=self.store.start_multipart
+        def cancel(*args):
+            identifier=create(*args)
+            with self.db.connect() as c:c.execute('UPDATE album_uploads SET completed=-1')
+            return identifier
+        with mock.patch.object(self.store,'start_multipart',side_effect=cancel),self.assertRaises(album.AlbumError):self.multipart()
+        self.assertEqual(self.store.multipart,{})
+    def test_stale_multipart_worker_cannot_delete_a_newer_publication(self):
+        ticket,_=self.multipart();self.a.complete_upload(self.handler({'token':ticket['token']}),ticket['id'],self.config)
+        entered=threading.Event();release=threading.Event();finish=self.store.finish_multipart;calls=[]
+        def delayed(*args):
+            finish(*args);calls.append(args)
+            if len(calls)==1:entered.set();release.wait(3)
+        with mock.patch.object(self.store,'finish_multipart',side_effect=delayed),concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            stale=pool.submit(album_jobs.process_next,self.a)
+            try:
+                self.assertTrue(entered.wait(2))
+                with self.db.connect() as c:c.execute('UPDATE album_jobs SET ready=0')
+                self.assertTrue(album_jobs.process_next(self.a))
+            finally:release.set();stale.result(timeout=3)
+        self.assertEqual(self.a.public(self.config)['count'],1);self.assertEqual(len(self.store.files),1)
     def queue(self,t,data=fixtures.PHOTO,mime='image/jpeg'):
         self.store.files[self.store.key('incoming',t['id'],album.EXTENSIONS[mime])]=(data,mime)
         return self.a.complete_upload(self.handler({'token':t['token']}),t['id'],self.config)

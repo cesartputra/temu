@@ -18,6 +18,7 @@ def initialize(album):
     with album.db.connect() as c:
         c.executescript('''CREATE TABLE IF NOT EXISTS album_jobs(id TEXT PRIMARY KEY,state TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,ready REAL NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '',claim TEXT NOT NULL DEFAULT '');
         CREATE TABLE IF NOT EXISTS album_requests(request_id TEXT PRIMARY KEY,item TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS album_multipart(id TEXT PRIMARY KEY,upload_id TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS album_jobs_ready ON album_jobs(state,ready);
         CREATE INDEX IF NOT EXISTS album_uploads_expiry ON album_uploads(expires);
         CREATE INDEX IF NOT EXISTS album_items_visible_created ON album_items(hidden,created DESC);''')
@@ -49,7 +50,7 @@ def process_next(album):
     """Claim one job atomically; slow storage I/O runs outside metadata locks."""
     from album import AlbumError, EXTENSIONS, valid_media, stamp
     if not album.worker_slots.acquire(blocking=False):return False
-    item=None;published=False;target=None;claim=secrets.token_hex(16)
+    item=None;published=False;target=None;multipart=None;claim=secrets.token_hex(16)
     try:
         with album.upload_lock,album.db.connect() as c:
             c.execute('BEGIN IMMEDIATE')
@@ -58,13 +59,17 @@ def process_next(album):
             if not job:return False
             item=job[0];c.execute("UPDATE album_jobs SET state='running',attempts=attempts+1,ready=?,claim=? WHERE id=?",(time.time()+JOB_LEASE,claim,item))
             row=c.execute('SELECT name,caption,filter,mime,size FROM album_uploads WHERE id=?',(item,)).fetchone()
+            multipart=c.execute('SELECT upload_id FROM album_multipart WHERE id=?',(item,)).fetchone()
         # Separate targets keep an expired worker from overwriting/deleting a
         # replacement worker's result. Public item IDs remain unchanged.
         name,caption,preset,mime,size=row;store=album.storage();source=store.key('incoming',item,EXTENSIONS[mime]);target=store.key('media',claim,EXTENSIONS[mime])
-        actual,content,etag,head=store.inspect(source)
+        if multipart:
+            if not multipart[0]:raise album_storage.StorageError('Sesi unggahan belum siap.')
+            target=store.key('media',item,EXTENSIONS[mime]);store.finish_multipart(target,multipart[0],size)
+        actual,content,etag,head=store.inspect(target if multipart else source)
         if actual!=size or content!=mime or not etag or not valid_media(mime,head):raise AlbumError('Unggahan tidak sesuai format atau ukuran. Silakan ambil ulang.',415)
         # Crucially: never hold the metadata lock during S3/disk I/O.
-        store.copy(source,target,etag,size,mime)
+        if not multipart:store.copy(source,target,etag,size,mime)
         with album.upload_lock,album.db.connect() as c:
             c.execute('BEGIN IMMEDIATE')
             current=c.execute('SELECT completed FROM album_uploads WHERE id=?',(item,)).fetchone()
@@ -75,8 +80,9 @@ def process_next(album):
             c.execute('UPDATE album_uploads SET completed=1,expires=? WHERE id=?',(int(time.time())+900,item))
             c.execute("UPDATE album_jobs SET state='done' WHERE id=?",(item,))
             published=True
-        try:store.delete(source)
-        except album_storage.StorageError:pass
+        if not multipart:
+            try:store.delete(source)
+            except album_storage.StorageError:pass
         return True
     except (AlbumError,album_storage.StorageError,OSError,sqlite3.Error,ValueError) as error:
         if item:
@@ -86,7 +92,7 @@ def process_next(album):
                     retry=not isinstance(error,AlbumError) and job[0]<3
                     c.execute('UPDATE album_jobs SET state=?,ready=?,error=? WHERE id=?',('queued' if retry else 'failed',time.time()+min(60,10*2**job[0]),str(error)[:300] if isinstance(error,(AlbumError,album_storage.StorageError)) else 'Momen belum berhasil diproses. Silakan coba lagi.',item))
                     if not retry:c.execute('UPDATE album_uploads SET completed=-1,expires=? WHERE id=?',(int(time.time())+900,item))
-            if target and not published:
+            if target and not published and not multipart:
                 try:album.storage().delete(target)
                 except (album_storage.StorageError,OSError):pass
         if item is None:raise

@@ -110,12 +110,27 @@ class S3VideoTests(unittest.TestCase):
             self.assertEqual(error.exception.status,429)
 
 class EncoderTests(unittest.TestCase):
-    def test_linux_encoder_memory_is_capped_below_pod_memory(self):
+    def test_encoder_has_bounded_diagnostics_and_limits_allocator_arenas(self):
+        def failure(*args,**kwargs):
+            self.assertEqual(kwargs['env']['MALLOC_ARENA_MAX'],'2');self.assertEqual(kwargs['env']['OMP_NUM_THREADS'],'1')
+            kwargs['stderr'].write(b'x'*5000+b' pthread_create failed');kwargs['stderr'].flush()
+            process=mock.Mock();process.pid=123456;process.communicate.return_value=(b'',None);process.returncode=245;process.poll.return_value=245;return process
+        with mock.patch.object(album_video.subprocess,'Popen',side_effect=failure),mock.patch.object(album_video.os,'setpriority'),self.assertRaises(album_video.VideoError) as error:
+            album_video.run(['ffmpeg'],1,threading.Event())
+        self.assertIn('exit 245',str(error.exception));self.assertIn('pthread_create failed',str(error.exception));self.assertLess(len(str(error.exception)),2200)
+    def test_linux_virtual_memory_allows_thread_reservations(self):
         import resource
         process=mock.Mock();process.pid=123456;process.communicate.return_value=(b'{}',None);process.returncode=0;process.poll.return_value=0
         with mock.patch.object(album_video.subprocess,'Popen',return_value=process),mock.patch.object(album_video.os,'setpriority'),mock.patch.object(album_video.os,'uname',return_value=type('System',(),{'sysname':'Linux'})()),mock.patch.object(Path,'read_text',return_value=str(512*1024*1024)),mock.patch.object(resource,'prlimit',create=True) as limit:
             self.assertEqual(album_video.run(['ffprobe'],1,threading.Event()),b'{}')
-        expected=512*1024*1024*2//3;limit.assert_called_once_with(123456,resource.RLIMIT_AS,(expected,expected))
+        expected=768*1024*1024;limit.assert_called_once_with(123456,resource.RLIMIT_AS,(expected,expected))
+    def test_encoder_is_killed_when_resident_memory_exceeds_its_share_of_pod_ram(self):
+        import resource
+        process=mock.Mock();process.pid=123456;process.communicate.side_effect=subprocess.TimeoutExpired('ffmpeg',.2);process.poll.return_value=None
+        def contents(path):return 'VmRSS: 400000 kB' if str(path).endswith('/status') else str(512*1024*1024)
+        with mock.patch.object(album_video.subprocess,'Popen',return_value=process),mock.patch.object(album_video.os,'setpriority'),mock.patch.object(album_video.os,'uname',return_value=type('System',(),{'sysname':'Linux'})()),mock.patch.object(Path,'read_text',contents),mock.patch.object(resource,'prlimit',create=True),mock.patch.object(album_video.os,'killpg') as kill,self.assertRaisesRegex(album_video.VideoError,'memory budget'):
+            album_video.run(['ffmpeg'],1,threading.Event())
+        kill.assert_called_once_with(123456,album_video.signal.SIGKILL);process.wait.assert_called_once()
     def test_encoder_restricts_protocols_threads_output_size_and_handles_hdr(self):
         with tempfile.TemporaryDirectory() as directory:
             source=Path(directory)/'input.mov';target=Path(directory)/'preview.mp4';source.write_bytes(VIDEO);target.write_bytes(PREVIEW)

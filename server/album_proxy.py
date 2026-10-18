@@ -33,7 +33,7 @@ class AlbumProxy:
         if not 0<=size<=100*1024*1024 or h.headers.get('Transfer-Encoding'):
             h.close_connection=True;h.reply(413,{'error':'Ukuran unggahan tidak valid.'});return True
         if not self.slots.acquire(blocking=False):
-            h.close_connection=True;h.reply(503,{'error':'Album sedang sibuk. Coba lagi sebentar; buku tamu tetap dapat digunakan.'});return True
+            h.close_connection=True;h.reply(503,{'error':'Album sedang sibuk. Coba lagi sebentar; buku tamu tetap dapat digunakan.','retryAfter':2});return True
         connection=http.client.HTTPConnection(self.host,self.port,timeout=90 if h.command in ('PUT','POST') else 8);started=False
         try:
             connection.connect();connection.putrequest(h.command,h.path,skip_host=True,skip_accept_encoding=True)
@@ -49,7 +49,7 @@ class AlbumProxy:
                     connection.send(chunk);remaining-=len(chunk)
             r=connection.getresponse();h.send_response(r.status)
             for name,value in r.getheaders():
-                if name.lower() in ('content-type','content-length','content-range','content-disposition','set-cookie','accept-ranges','cross-origin-resource-policy','location'):h.send_header(name,value)
+                if name.lower() in ('content-type','content-length','content-range','content-disposition','set-cookie','accept-ranges','cross-origin-resource-policy','location','retry-after'):h.send_header(name,value)
             h.send_header('Cache-Control','private, no-store');h.end_headers();started=True
             if h.command!='HEAD':
                 while True:
@@ -58,6 +58,6 @@ class AlbumProxy:
                     h.wfile.write(chunk)
         except (OSError,TimeoutError,http.client.HTTPException):
             h.close_connection=True
-            if not started:h.reply(503,{'error':'Album sementara tidak tersedia. Buku tamu dan undangan tetap dapat digunakan.'})
+            if not started:h.reply(503,{'error':'Album sementara tidak tersedia. Buku tamu dan undangan tetap dapat digunakan.','retryAfter':3})
         finally:connection.close();self.slots.release()
         return True

@@ -16,33 +16,49 @@ def initialize(album):
             attempts INTEGER NOT NULL,object_key TEXT,size INTEGER NOT NULL DEFAULT 0)''')
 
 def run(command,timeout,stop):
-    process=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,start_new_session=True)
+    # glibc's per-thread arenas reserve virtual memory even when RSS is small.
+    environment={**os.environ,'MALLOC_ARENA_MAX':'2','OMP_NUM_THREADS':'1','OPENBLAS_NUM_THREADS':'1'}
+    errors=tempfile.TemporaryFile()
+    try:process=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=errors,start_new_session=True,env=environment)
+    except OSError:errors.close();raise
     try:
         try:os.setpriority(os.PRIO_PROCESS,process.pid,10)
         except (AttributeError,OSError):pass
-        # Bound the child below the pod's memory limit so failed encoding keeps
-        # the HTTP process alive, including on the existing 512 MB album pod.
+        rss_limit=None
         if hasattr(os,'uname') and os.uname().sysname=='Linux':
             import resource
-            limit=768*1024*1024
+            rss_limit=768*1024*1024
             for filename in ('/sys/fs/cgroup/memory.max','/sys/fs/cgroup/memory/memory.limit_in_bytes'):
-                try:limit=min(limit,int(Path(filename).read_text())*2//3)
+                try:rss_limit=min(rss_limit,int(Path(filename).read_text())*2//3)
                 except (OSError,ValueError):pass
+            # Thread stacks and shared libraries reserve address space without
+            # consuming equivalent RAM; bound RSS separately below.
+            limit=max(768*1024*1024,2*rss_limit)
             try:resource.prlimit(process.pid,resource.RLIMIT_AS,(limit,limit))
             except ProcessLookupError:pass
         deadline=time.monotonic()+timeout
         while not stop.is_set() and time.monotonic()<deadline:
             try:
-                output,_=process.communicate(timeout=1)
-                if process.returncode:raise VideoError('Video preview encoder failed.')
+                output,_=process.communicate(timeout=.2)
+                if process.returncode:
+                    errors.seek(max(0,errors.seek(0,os.SEEK_END)-2048))
+                    detail=errors.read(2048).decode(errors='replace').strip()
+                    raise VideoError('Video preview encoder failed (exit '+str(process.returncode)+'): '+detail)
                 return output
-            except subprocess.TimeoutExpired:pass
+            except subprocess.TimeoutExpired:
+                # shortcut: RSS is sampled; use a separate encoder cgroup for a strict RAM ceiling.
+                if rss_limit:
+                    try:
+                        status=Path('/proc/'+str(process.pid)+'/status').read_text()
+                        resident=next(int(line.split()[1])*1024 for line in status.splitlines() if line.startswith('VmRSS:'))
+                    except (OSError,ValueError,StopIteration):continue
+                    if resident>rss_limit:raise VideoError('Video preview memory budget exceeded; original retained.')
         raise VideoError('Video preview cancelled or timed out.')
     finally:
         if process.poll() is None:
             try:os.killpg(process.pid,signal.SIGKILL)
             except ProcessLookupError:pass
-        process.wait()
+        process.wait();errors.close()
 
 def probe(path,stop):
     data=json.loads(run(['ffprobe','-v','error','-protocol_whitelist','file,pipe','-format_whitelist','mov,matroska,webm',

@@ -132,11 +132,14 @@ class Album:
     def clean_uploads(self,store):
         if not self.cleanup_lock.acquire(blocking=False):return
         try:
-            with self.db.connect() as c:rows=c.execute("SELECT u.id,u.mime FROM album_uploads u LEFT JOIN album_jobs j ON u.id=j.id WHERE u.expires<? AND coalesce(j.state,'')!='running' LIMIT 4",(int(time.time()),)).fetchall()
-            for item,mime in rows:
-                store.delete(store.key('incoming',item,EXTENSIONS[mime]))
+            with self.db.connect() as c:rows=c.execute("SELECT u.id,u.mime,u.completed,m.id FROM album_uploads u LEFT JOIN album_jobs j ON u.id=j.id LEFT JOIN album_multipart m ON u.id=m.id WHERE u.expires<? AND coalesce(j.state,'')!='running' LIMIT 4",(int(time.time()),)).fetchall()
+            for item,mime,completed,multipart in rows:
+                if multipart:
+                    key=store.key('media',item,EXTENSIONS[mime]);store.clean_multipart(key)
+                    if completed!=1:store.delete(key)
+                else:store.delete(store.key('incoming',item,EXTENSIONS[mime]))
                 with self.upload_lock,self.db.connect() as c:
-                    c.execute('DELETE FROM album_requests WHERE item=? AND NOT EXISTS (SELECT 1 FROM album_items WHERE id=?)',(item,item));c.execute('DELETE FROM album_jobs WHERE id=?',(item,));c.execute('DELETE FROM album_uploads WHERE id=? AND expires<?',(item,int(time.time())))
+                    c.execute('DELETE FROM album_requests WHERE item=? AND NOT EXISTS (SELECT 1 FROM album_items WHERE id=?)',(item,item));c.execute('DELETE FROM album_jobs WHERE id=?',(item,));c.execute('DELETE FROM album_uploads WHERE id=? AND expires<?',(item,int(time.time())));c.execute('DELETE FROM album_multipart WHERE id=?',(item,))
         finally:self.cleanup_lock.release()
     def begin_upload(self,h,config):
         if not config['uploadsOpen']:raise AlbumError('Unggahan album sudah ditutup.',403)
@@ -178,7 +181,23 @@ class Album:
                 item=secrets.token_hex(16);token=secrets.token_urlsafe(32);remaining=600
                 c.execute('INSERT INTO album_uploads VALUES(?,?,?,?,?,?,?,?,0)',(item,token,name.strip(),caption.strip(),preset,mime,size,int(time.time())+900))
                 c.execute('INSERT INTO album_requests VALUES(?,?)',(request_id,item))
+                if body.get('multipart') is True:c.execute('INSERT INTO album_multipart VALUES(?,?)',(item,''))
+            multipart=c.execute('SELECT upload_id FROM album_multipart WHERE id=?',(item,)).fetchone()
             url=store.presign('PUT',store.key('incoming',item,EXTENSIONS[mime]),expires=remaining,mime=mime,size=size)
+        if multipart:
+            target=store.key('media',item,EXTENSIONS[mime]);identifier=multipart[0]
+            if not identifier:
+                created=store.start_multipart(target,mime);keep=False
+                try:
+                    with self.upload_lock,self.db.connect() as c:
+                        c.execute('BEGIN IMMEDIATE')
+                        current=c.execute('SELECT u.completed,m.upload_id FROM album_uploads u JOIN album_multipart m ON u.id=m.id WHERE u.id=? AND u.expires>?',(item,int(time.time()))).fetchone()
+                        if not current or current[0]!=0:raise AlbumError('Unggahan sudah dibatalkan.',410)
+                        identifier=current[1] or created
+                        if not current[1]:c.execute('UPDATE album_multipart SET upload_id=? WHERE id=?',(created,item));keep=True
+                finally:
+                    if not keep:store.abort_multipart(target,created)
+            url=store.presign('PUT',target,expires=remaining,mime=mime,size=size,query=[('partNumber','1'),('uploadId',identifier)])
         return {'id':item,'token':token,'url':url,'headers':{'Content-Type':mime},'expiresIn':remaining}
     def upload_record(self,item,body):
         with self.db.connect() as c:row=c.execute('SELECT token,name,caption,filter,mime,size,expires,completed FROM album_uploads WHERE id=?',(item,)).fetchone()
