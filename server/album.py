@@ -142,7 +142,6 @@ class Album:
                     c.execute('DELETE FROM album_requests WHERE item=? AND NOT EXISTS (SELECT 1 FROM album_items WHERE id=?)',(item,item));c.execute('DELETE FROM album_jobs WHERE id=?',(item,));c.execute('DELETE FROM album_uploads WHERE id=? AND expires<?',(item,int(time.time())));c.execute('DELETE FROM album_multipart WHERE id=?',(item,))
         finally:self.cleanup_lock.release()
     def begin_upload(self,h,config):
-        if not config['uploadsOpen']:raise AlbumError('Unggahan album sudah ditutup.',403)
         body=self.read_body(h);size=body.get('size');mime=body.get('mime');preset=body.get('filter','original')
         name=body.get('name','');caption=body.get('caption','');request_id=body.get('requestId',secrets.token_hex(16))
         if not isinstance(request_id,str) or not re.fullmatch(r'[a-f0-9]{32}',request_id):raise AlbumError('Tiket unggahan tidak valid.')
@@ -160,11 +159,18 @@ class Album:
             old=c.execute('SELECT u.id,u.token,u.name,u.caption,u.filter,u.mime,u.size,u.expires,u.completed FROM album_requests r JOIN album_uploads u ON r.item=u.id WHERE r.request_id=?',(request_id,)).fetchone()
             if old:
                 if tuple(old[2:7])!=(name.strip(),caption.strip(),preset,mime,size):raise AlbumError('Permintaan unggahan berubah.',409)
-                if old[7]<int(time.time()) or old[8]!=0:raise AlbumError('Tiket sudah selesai atau kedaluwarsa. Bagikan ulang.',410)
-                if c.execute('SELECT 1 FROM album_jobs WHERE id=?',(old[0],)).fetchone():raise AlbumError('Momen sedang diproses. Periksa status unggahan.',409)
+                if old[8]!=0:raise AlbumError('Tiket sudah dibatalkan. Bagikan ulang.',410)
+                job=c.execute('SELECT state FROM album_jobs WHERE id=?',(old[0],)).fetchone()
+                if old[7]>int(time.time()) and job:return {'id':old[0],'token':old[1],'pending':True,'state':job[0],'retryAfter':6}
                 item,token=old[:2];remaining=min(600,old[7]-int(time.time())-300)
-                if remaining<=0:raise AlbumError('Tiket kedaluwarsa. Bagikan ulang.',410)
-            else:
+                if remaining<=0:
+                    # Revoke the old publication before replacing its request mapping.
+                    # Its bytes remain reserved until the original PUT URL expires.
+                    c.execute('UPDATE album_uploads SET completed=-1 WHERE id=?',(item,))
+                    c.execute("UPDATE album_jobs SET state='failed',error='Tiket unggahan kedaluwarsa.' WHERE id=?",(item,))
+                    c.execute('DELETE FROM album_requests WHERE request_id=?',(request_id,));old=None
+            if not config['uploadsOpen']:raise AlbumError('Unggahan album sudah ditutup.',403)
+            if not old:
                 used,count=c.execute('SELECT coalesce(sum(size),0),count(*) FROM album_items').fetchone()
                 reserved=c.execute('SELECT coalesce(sum(size),0) FROM album_uploads WHERE completed<=0').fetchone()[0]
                 # An expired/deleted ticket stays reserved until staging cleanup

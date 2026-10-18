@@ -32,3 +32,52 @@ test('rejected jobs stay available for retry or explicit removal while later job
  await until(async()=>{const rows=await queue.list();return rows.length===1&&rows[0].state==='failed';});
  assert.match((await queue.list())[0].error,/Invalid/);await queue.discard('bad');assert.equal((await queue.list()).length,0);
 });
+test('returning after hours aborts a hung transfer and resumes original files without accepting stale callbacks',async()=>{
+ const indexedDB=new IDBFactory(),sent=[],saved=[];let clock=0,oldSave,oldSignal,finishOld;
+ const queue=create({indexedDB,now:()=>clock,onSaved:r=>saved.push(r.id),send:async(item,save,progress,{signal})=>{
+  sent.push(item.id);assert.equal(await item.blob.text(),'original photo bytes');
+  if(sent.length===1){oldSave=save;oldSignal=signal;return new Promise(resolve=>finishOld=resolve);}
+  return {id:item.id};
+ }});
+ await queue.enqueue(job('first'));await until(()=>!!oldSignal);await queue.enqueue(job('second'));
+ clock=3*60*60*1000;await queue.resume();await until(()=>saved.length===2);
+ assert.equal(oldSignal.aborted,true);assert.deepEqual(sent,['first','first','second']);assert.deepEqual(saved,['first','second']);
+ await assert.rejects(oldSave({stage:'uploaded'}),{name:'AbortError'});finishOld({id:'stale'});await tick();assert.deepEqual(await queue.list(),[]);
+});
+test('pausing for the native camera cancels network work and keeps the persisted ticket for the next foreground session',async()=>{
+ let signal,calls=0;const saved=[];
+ const queue=create({indexedDB:new IDBFactory(),onSaved:r=>saved.push(r.id),send:async(item,save,progress,options)=>{
+  calls++;if(calls===1){await save({ticket:{id:'existing',token:'private'},stage:'uploaded'});signal=options.signal;return new Promise(()=>{});}
+  assert.equal(item.ticket.id,'existing');assert.equal(item.stage,'uploaded');return {id:item.id};
+ }});
+ await queue.enqueue(job('stable'));await until(()=>!!signal);queue.pause();await until(async()=>(await queue.list())[0]?.state==='queued');
+ assert.equal(signal.aborted,true);assert.equal(calls,1);await queue.resume();await until(()=>saved.length===1);assert.equal(calls,2);
+});
+test('expired claims can be recovered by another tab and the old tab cannot overwrite or delete its result',async()=>{
+ const indexedDB=new IDBFactory();let clock=0,oldSave,finishOld;const completed=[];
+ const first=create({indexedDB,now:()=>clock,send:async(item,save)=>{oldSave=save;return new Promise(resolve=>finishOld=resolve);}});
+ const next=create({indexedDB,now:()=>clock,onSaved:r=>completed.push(r.id),send:async item=>({id:item.id})});
+ await first.enqueue(job('old'));await until(()=>!!oldSave);clock=1;await next.enqueue(job('new'));await tick();assert.deepEqual(completed,[]);
+ clock=91000;await next.resume();await until(()=>completed.length===2);assert.deepEqual(completed,['old','new']);
+ await assert.rejects(oldSave({result:{id:'stale'}}),{name:'AbortError'});finishOld({id:'old'});await tick();assert.deepEqual(await next.list(),[]);
+});
+test('watchdog releases a silent transfer and gives failed files a retry instead of blocking later moments',async t=>{
+ t.mock.timers.enable({apis:['setInterval']});let clock=0,signal;const saved=[];
+ const queue=create({indexedDB:new IDBFactory(),now:()=>clock,onSaved:r=>saved.push(r.id),send:async(item,save,progress,options)=>{
+  if(item.id==='stuck'){signal=options.signal;return new Promise(()=>{});}return {id:item.id};
+ }});
+ await queue.enqueue(job('stuck'));await until(()=>!!signal);await queue.enqueue(job('later'));clock=61000;t.mock.timers.tick(10000);
+ await until(()=>saved.length===1);const rows=await queue.list();assert.equal(signal.aborted,true);assert.equal(rows[0].state,'failed');assert.match(rows[0].error,/satu menit/);assert.deepEqual(saved,['later']);
+});
+test('retrying an active row aborts its request before starting a fresh attempt',async()=>{
+ let calls=0,signal;const completed=[];
+ const queue=create({indexedDB:new IDBFactory(),onSaved:r=>completed.push(r.id),send:async(item,save,progress,options)=>{calls++;if(calls===1){signal=options.signal;return new Promise(()=>{});}return {id:item.id};}});
+ await queue.enqueue(job('same'));await until(()=>!!signal);await queue.retry('same');await until(()=>completed.length===1);assert.equal(signal.aborted,true);assert.equal(calls,2);
+});
+test('a stalled IndexedDB open times out and can reopen without changing the database or its version',async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});const factory=new IDBFactory();let requests=0;
+ const indexedDB={open(name,version){assert.equal(version,1);return requests++===0?{}:factory.open(name,version);}};
+ const queue=create({indexedDB,send:async item=>({id:item.id})});
+ const first=queue.resume();await tick();t.mock.timers.tick(15000);await assert.rejects(first,/Penyimpanan browser tertahan/);
+ await queue.enqueue(job('preserved'));await until(async()=>(await queue.list()).length===0);assert.ok(requests>=2);
+});

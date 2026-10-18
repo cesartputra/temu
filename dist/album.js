@@ -34,13 +34,17 @@ $('#name-form').onsubmit=event=>{
  $('#guest-name').value=name;hasName=true;showPage(info?.uploadsOpen?'camera':'gallery');if(!info?.uploadsOpen)loadGallery(true);
 };
 $('#edit-name').onclick=()=>{showPage('name');$('#guest-name').focus();};
-async function api(path,body){
+async function api(path,body,options={}){
  const request=async()=>{
- let r;try{r=await fetch('/api/album/'+path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-Temu-Album':'1'},body:body?JSON.stringify(body):undefined,cache:'no-store',signal:AbortSignal.timeout(15000)});}catch(error){error.status=0;throw error;}
- let data;try{data=await r.json();}catch{data={error:'Server belum dapat diakses. Silakan coba lagi.'};}
+ const timeout=AbortSignal.timeout(15000),controller=new AbortController(),cancel=()=>controller.abort(options.signal?.aborted?options.signal.reason:timeout.reason);
+ timeout.addEventListener('abort',cancel,{once:true});options.signal?.addEventListener('abort',cancel,{once:true});if(options.signal?.aborted)cancel();
+ try{
+ let r;try{r=await fetch('/api/album/'+path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-Temu-Album':'1'},body:body?JSON.stringify(body):undefined,cache:'no-store',signal:controller.signal});}catch(error){error.status=0;throw error;}
+ let data;try{data=await r.json();}catch{if(controller.signal.aborted)throw controller.signal.reason;throw Object.assign(Error('Respons server belum lengkap. Silakan coba lagi.'),{status:r.ok?502:r.status});}
  if(!r.ok){const error=Error(data.error||'Album belum dapat diakses.');error.status=r.status;error.retryAfter=data.retryAfter||Number(r.headers?.get('Retry-After'));throw error;}return data;
+ }finally{timeout.removeEventListener('abort',cancel);options.signal?.removeEventListener('abort',cancel);}
  };
- return body?request():TemuAlbumUpload.retry(request,{maxWait:30000});
+ return body?request():TemuAlbumUpload.retry(request,{maxWait:30000,signal:options.signal});
 }
 function filterRecords(){return [...classicFilters,...lightroomFilters];}
 function renderFilters(family){
@@ -108,7 +112,8 @@ const outbox=TemuAlbumQueue.create({send:sendQueued,onChange:renderQueue,onSaved
 function renderQueue(rows,error){
  queueRows=rows;$('#upload-queue').hidden=!rows.length&&!error;
  $('#queue-summary').textContent=error?error.message:rows.length+' momen dalam antrean'+(rows.some(x=>x.state==='failed')?' · perlu diperiksa':'');
- $('#queue-items').innerHTML=rows.map(job=>`<div class="queue-item"><span>${esc(job.name)} · ${job.state==='failed'?esc(job.error):job.result?'Foto tersimpan · menyiapkan thumbnail':job.stage==='uploaded'?'Memproses album…':job.state==='uploading'?'Mengunggah '+Math.round(job.progress||0)+'%':'Menunggu unggahan'}</span>${job.state==='failed'?`<button type="button" class="text-button" data-retry="${job.id}">Coba lagi</button><button type="button" class="text-button" data-remove="${job.id}">Hapus antrean</button>`:''}</div>`).join('');
+ const phases={recovering:'Memeriksa unggahan sebelumnya…',ticket:'Meminta giliran unggah…',waiting:'Menunggu server · file tetap tersimpan di HP',processing:'Memproses album…',thumbnail:'Foto tersimpan · menyiapkan thumbnail'};
+ $('#queue-items').innerHTML=rows.map(job=>`<div class="queue-item"><span>${esc(job.name)} · ${job.state==='failed'?esc(job.error):job.result?phases.thumbnail:job.state!=='uploading'?'Menunggu unggahan':job.phase==='uploading'?'Mengunggah '+Math.round(job.progress||0)+'%':phases[job.phase]||'Memeriksa unggahan sebelumnya…'}</span><button type="button" class="text-button" data-retry="${job.id}">Coba lagi</button>${job.state==='failed'?`<button type="button" class="text-button" data-remove="${job.id}">Hapus antrean</button>`:''}</div>`).join('');
 }
 $('#queue-items').onclick=async event=>{const retry=event.target.closest('[data-retry]'),remove=event.target.closest('[data-remove]');try{if(retry)await outbox.retry(retry.dataset.retry);if(remove&&confirm('Hapus momen ini dari antrean HP? Foto yang sudah tersimpan di album tetap ada.'))await outbox.discard(remove.dataset.remove);}catch(e){notice(e.message,true);}};
 $('#upload-form').onsubmit=async event=>{
@@ -121,39 +126,48 @@ $('#upload-form').onsubmit=async event=>{
   $('#caption-dialog').close();clearPreview();$('#caption').value='';$('#camera-status').textContent='Masuk antrean. Kamu bisa langsung mengambil foto atau video berikutnya.';notice('');
  }catch(e){notice(e.message,true);}finally{enqueuing=false;captureState();}
 };
-function putFile(url,headers,blob,progress){return new Promise((resolve,reject)=>{
+function putFile(url,headers,blob,progress,options={}){return new Promise((resolve,reject)=>{
+ const signal=options.signal;if(signal?.aborted)return reject(signal.reason);let finished=false;
  const xhr=new XMLHttpRequest();xhr.open('PUT',url);xhr.timeout=180000;for(const [key,value] of Object.entries(headers))xhr.setRequestHeader(key,value);
- xhr.upload.onprogress=event=>{if(event.lengthComputable)progress(event.loaded/event.total*100);};
- xhr.onload=()=>{if(xhr.status>=200&&xhr.status<300){try{resolve(xhr.responseText?JSON.parse(xhr.responseText):null);}catch{resolve(null);}}else{const error=Error('Unggahan belum berhasil. File tetap ada di antrean.');error.status=xhr.status;reject(error);}};
- xhr.onerror=xhr.ontimeout=()=>{const error=Error('Koneksi terputus. Coba lagi dari antrean.');error.status=0;reject(error);};xhr.send(blob);
+ const done=(error,value)=>{if(finished)return;finished=true;signal?.removeEventListener('abort',stop);if(error)reject(error);else resolve(value);};
+ const stop=()=>{xhr.abort();done(signal.reason);};signal?.addEventListener('abort',stop,{once:true});
+ xhr.upload.onprogress=event=>{if(!finished&&event.lengthComputable)progress(event.loaded/event.total*100);};
+ xhr.onload=()=>{if(xhr.status>=200&&xhr.status<300){let result=null;try{result=xhr.responseText?JSON.parse(xhr.responseText):null;}catch{}done(null,result);}else{const error=Error('Unggahan belum berhasil. File tetap ada di antrean.');error.status=xhr.status;done(error);}};
+ xhr.onerror=xhr.ontimeout=xhr.onabort=()=>{const error=signal?.aborted?signal.reason:Object.assign(Error('Koneksi terputus. File tetap tersimpan; coba lagi dari antrean.'),{status:0});done(error);};xhr.send(blob);
 });}
-async function sendQueued(job,save,progress){
+async function sendQueued(job,save,progress,options={}){
+ const {signal}=options,request=(path,body)=>api(path,body,{signal});
  let result=job.result;
  if(!result){
-  let ticket=job.ticket;
   if(info.storage==='s3'){
-   if(job.stage!=='uploaded'){
-    ticket=await TemuAlbumUpload.retry(()=>api('uploads',{requestId:job.id,name:job.name,caption:job.caption,mime:job.blob.type,size:job.blob.size,filter:job.filter,multipart:true}));
+   for(let attempt=0;attempt<2&&!result;attempt++){
+    const ticket=await TemuAlbumUpload.retry(async()=>{await save({phase:'ticket'});return request('uploads',{requestId:job.id,name:job.name,caption:job.caption,mime:job.blob.type,size:job.blob.size,filter:job.filter,multipart:true});},{signal,onWait:()=>save({phase:'waiting'})});
     if(ticket.completed)result=ticket;
     else{
-     await save({ticket});
-     await TemuAlbumUpload.retry(()=>putFile(ticket.url,ticket.headers,job.blob,progress),{maxWait:5*60*1000});
-     await save({stage:'uploaded'});
+     const uploaded=ticket.pending||(job.stage==='uploaded'&&job.ticket?.id===ticket.id);
+     await save({ticket,stage:uploaded?'uploaded':null});
+     if(!uploaded){
+      try{await TemuAlbumUpload.retry(async()=>{await save({phase:'uploading'});return putFile(ticket.url,ticket.headers,job.blob,progress,{signal});},{signal,maxWait:5*60*1000,onWait:()=>save({phase:'waiting'})});}
+      catch(error){if(attempt===0&&[403,404].includes(error.status))continue;throw error;}
+      await save({stage:'uploaded'});
+     }
+     await save({phase:'processing'});result=await TemuAlbumUpload.settled(ticket,request,{signal,onPending:()=>save({phase:'processing'}),onWait:()=>save({phase:'waiting'})});
     }
    }
-   if(!result){try{result=await TemuAlbumUpload.settled(ticket,api);}catch(error){if(error.status===410||error.status===403)await save({stage:null,ticket:null});throw error;}}
   }else{
    // Local deployments share the same idempotent request ID as direct S3 uploads.
-   result=await putFile('/api/album/upload',{'Content-Type':job.blob.type,'X-Temu-Album':'1','X-Album-Name':encodeURIComponent(job.name),'X-Album-Caption':encodeURIComponent(job.caption),'X-Album-Filter':job.filter,'X-Album-Request-Id':job.id},job.blob,progress);
+   await save({phase:'uploading'});result=await putFile('/api/album/upload',{'Content-Type':job.blob.type,'X-Temu-Album':'1','X-Album-Name':encodeURIComponent(job.name),'X-Album-Caption':encodeURIComponent(job.caption),'X-Album-Filter':job.filter,'X-Album-Request-Id':job.id},job.blob,progress,{signal});
   }
   await save({result});
  }
  if(job.blob.type.startsWith('image/')){
+  await save({phase:'thumbnail'});
   const thumbnail=await TemuAlbumPhoto.thumbnail(job.blob,job.filter);
   await TemuAlbumUpload.retry(async()=>{
-   const response=await fetch('/api/album/thumbnail/'+result.id,{method:'PUT',headers:{'Content-Type':'image/jpeg','X-Temu-Album':'1','X-Album-Thumbnail-Key':result.thumbnailKey},body:thumbnail,signal:AbortSignal.timeout(15000)});
+   if(signal?.aborted)throw signal.reason;
+   let response;try{response=await fetch('/api/album/thumbnail/'+result.id,{method:'PUT',headers:{'Content-Type':'image/jpeg','X-Temu-Album':'1','X-Album-Thumbnail-Key':result.thumbnailKey},body:thumbnail,signal:signal||AbortSignal.timeout(15000)});}catch(error){error.status=0;throw error;}
    if(!response.ok){const error=Error('Foto asli tersimpan, thumbnail belum tersedia. Coba lagi untuk menyiapkan preview.');error.status=response.status;throw error;}
-  },{maxWait:60000});
+  },{signal,maxWait:60000,onWait:()=>save({phase:'thumbnail'})});
  }
  return result;
 }
@@ -163,7 +177,8 @@ async function resumePending(){
 }
 window.addEventListener('online',()=>{if(info)outbox.resume().catch(e=>notice(e.message,true));});
 window.addEventListener('pageshow',()=>{if(info)outbox.resume().catch(e=>notice(e.message,true));});
-document.addEventListener('visibilitychange',()=>{if(!document.hidden&&info)outbox.resume().catch(e=>notice(e.message,true));});
+window.addEventListener('pagehide',()=>outbox.pause());window.addEventListener('offline',()=>outbox.pause());
+document.addEventListener('visibilitychange',()=>{if(document.hidden)outbox.pause();else if(info)outbox.resume().catch(e=>notice(e.message,true));});
 window.addEventListener('resize',layout);
 window.addEventListener('beforeunload',event=>{if(enqueuing||file||queueRows.length){event.preventDefault();event.returnValue='';}});
 function renderGallery(){

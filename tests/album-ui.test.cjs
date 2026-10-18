@@ -3,7 +3,7 @@ const source=fs.readFileSync('dist/album.js','utf8'),tick=()=>new Promise(setImm
 function harness({lightroom=[]}={}){
  const nodes={},revoked=[],queued=[],timers=[],shared=[],events={},saves=[];let queueOptions;
  const make=()=>({hidden:false,disabled:false,value:'',textContent:'',style:{},attributes:{},childElementCount:0,classList:{toggle(){},add(){},remove(){}},setCustomValidity(v){this.validationMessage=v;},reportValidity(){},getBoundingClientRect:()=>({width:360,height:480}),focus(){this.focused=true;},showModal(){this.open=true;},close(){this.open=false;this.listeners?.close?.();},getAttribute(k){return this[k]??null;},setAttribute(k,v){this.attributes[k]=v;},removeAttribute(k){delete this[k];},pause(){},click(){this.clicked=true;},addEventListener(name,fn){(this.listeners??={})[name]=fn;},querySelectorAll(){return [];}});
- const document={body:make(),hidden:false,addEventListener(){},querySelector:s=>nodes[s]??=make(),querySelectorAll:s=>s==='[data-filter]'?['original','film','warm','mono','dazz'].map(filter=>Object.assign(nodes[filter]??=make(),{dataset:{filter}})):s==='[data-story-overlay]'?['celebration','monogram','none'].map(storyOverlay=>Object.assign(nodes[storyOverlay]??=make(),{dataset:{storyOverlay}})):[]};
+ const document={body:make(),hidden:false,addEventListener:(name,fn)=>events[name]=fn,querySelector:s=>nodes[s]??=make(),querySelectorAll:s=>s==='[data-filter]'?['original','film','warm','mono','dazz'].map(filter=>Object.assign(nodes[filter]??=make(),{dataset:{filter}})):s==='[data-story-overlay]'?['celebration','monogram','none'].map(storyOverlay=>Object.assign(nodes[storyOverlay]??=make(),{dataset:{storyOverlay}})):[]};
  const config={title:'Reva & Cesar',count:0,uploadsOpen:true,revealed:true,filter:'film',storage:'s3'};
  const context={TemuAlbumLoading:require('../dist/album-loading.js'),document,window:{matchMedia:()=>({matches:false}),addEventListener:(name,fn)=>events[name]=fn},navigator:{canShare:()=>true,share:async value=>shared.push(value)},setTimeout(fn,ms){timers.push({fn,ms});},location:{hash:'',pathname:'/album'},history:{replaceState(){}},fetch:async()=>({ok:true,json:async()=>config,blob:async()=>new Blob(['original bytes'])}),URL:{createObjectURL:()=> 'blob:moment',revokeObjectURL:u=>revoked.push(u)},URLSearchParams,TemuAlbumPresets:{load:async()=>lightroom,has:id=>lightroom.some(p=>p.id===id),get:id=>lightroom.find(p=>p.id===id)},TemuAlbumPhoto:{preview:async()=>new Blob(['filtered preview'],{type:'image/png'}),story:async()=>new Blob(['story'],{type:'image/png'}),thumbnail:async()=>new Blob(['thumbnail'],{type:'image/jpeg'})},TemuAlbumUpload:require('../dist/album-upload.js'),TemuAlbumQueue:{create(options){queueOptions=options;return {resume:async()=>{},enqueue:async job=>queued.push(job),retry:async()=>{},discard:async()=>{}};}},crypto:require('node:crypto').webcrypto,AbortController,sessionStorage:{getItem(){return null;},removeItem(){}},setInterval(){},Date,AbortSignal,Blob,confirm:()=>true};
  vm.runInNewContext(source,context);return {nodes,revoked,queued,timers,shared,events,saves,context,config,get queueOptions(){return queueOptions;},run:s=>vm.runInNewContext(s,context)};
@@ -38,6 +38,48 @@ test('S3 transfer uses original bytes, frozen filter metadata and only signed PU
  h.context.capturePut=(...args)=>{puts.push(args);return null;};h.run('putFile=async(...args)=>capturePut(...args)');
  const result=await h.run('sendQueued({id:"stable",blob:original,name:"Guest",caption:"hello",filter:"mono"},async patch=>globalThis.patches.push(patch),()=>{})');
  assert.equal(puts[0][2],original);assert.deepEqual(Object.keys(puts[0][1]),['Content-Type']);assert.equal(JSON.parse(requests[0].options.body).filter,'mono');assert.equal(JSON.parse(requests[0].options.body).requestId,'stable');assert.equal(requests.at(-1).path,'/api/album/thumbnail/remote');assert.equal(result.id,'remote');
+});
+test('recovered server jobs are polled without PUT, and published originals only need their thumbnail',async()=>{
+ const h=harness();await tick();const paths=[];h.context.original=new Blob(['original'],{type:'image/jpeg'});
+ h.run('putFile=()=>{throw Error("must not upload twice")}');
+ h.context.fetch=async path=>{paths.push(path);return {ok:true,json:async()=>path.endsWith('/uploads')?{id:'same',token:'token',pending:true,state:'running'}:{id:'same',thumbnailKey:'thumb'}};};
+ const result=await h.run('sendQueued({id:"stable",blob:original,name:"Guest",filter:"film"},async()=>{},()=>{})');
+ assert.equal(result.id,'same');assert.ok(paths.includes('/api/album/uploads/same/status'));assert.ok(!paths.includes('/api/album/uploads/same/complete'));assert.ok(paths.includes('/api/album/thumbnail/same'));
+ paths.length=0;await h.run('sendQueued({id:"stable",blob:original,name:"Guest",filter:"film",result:{id:"same",thumbnailKey:"thumb"}},async()=>{},()=>{})');
+ assert.deepEqual(paths,['/api/album/thumbnail/same']);
+});
+test('an expired uploaded ticket reuploads the retained original only when the server returns a different ticket',async()=>{
+ const h=harness();await tick();const puts=[],patches=[];h.context.original=new Blob(['original'],{type:'image/jpeg'});
+ h.context.fetch=async path=>({ok:true,json:async()=>path.endsWith('/uploads')?{id:'renewed',token:'token',url:'https://storage/renewed',headers:{'Content-Type':'image/jpeg'}}:{id:'renewed',thumbnailKey:'thumb'}});
+ h.context.recordPut=(...args)=>puts.push(args);h.context.recordPatch=patch=>patches.push(patch);h.run('putFile=async(...args)=>recordPut(...args)');
+ await h.run('sendQueued({id:"stable",blob:original,name:"Guest",filter:"film",stage:"uploaded",ticket:{id:"expired"}},recordPatch,()=>{})');
+ assert.equal(puts.length,1);assert.equal(puts[0][2],h.context.original);assert.ok(patches.some(p=>p.stage===null));assert.ok(patches.some(p=>p.stage==='uploaded'));
+});
+test('an expired signed PUT URL is reconciled with the same request ID before one fresh transfer attempt',async()=>{
+ const h=harness();await tick();const ids=[];let tickets=0,puts=0;h.context.original=new Blob(['original'],{type:'image/jpeg'});
+ h.context.fetch=async(path,options)=>{if(path.endsWith('/uploads')){tickets++;ids.push(JSON.parse(options.body).requestId);}return {ok:true,json:async()=>path.endsWith('/uploads')?{id:'ticket'+tickets,token:'token',url:'https://storage/upload',headers:{}}:{id:'ticket2',thumbnailKey:'thumb'}};};
+ h.context.transfer=async()=>{if(++puts===1)throw Object.assign(Error('expired'),{status:403});};h.run('putFile=transfer');
+ const result=await h.run('sendQueued({id:"stable",blob:original,name:"Guest",filter:"film"},async()=>{},()=>{})');assert.deepEqual(ids,['stable','stable']);assert.equal(puts,2);assert.equal(result.id,'ticket2');
+});
+test('retry can cancel the real XHR and the underlying metadata fetch',async()=>{
+ const h=harness();await tick();const requests=[];
+ h.context.XMLHttpRequest=class{constructor(){this.upload={};requests.push(this);}open(){}setRequestHeader(){}send(){}abort(){this.aborted=true;this.onabort?.();}};
+ h.context.controller=new AbortController();h.context.original=new Blob(['bytes']);
+ const transfer=h.run('putFile("https://storage/part",{},original,()=>{},{signal:controller.signal})');h.context.controller.abort();await assert.rejects(transfer,{name:'AbortError'});assert.equal(requests[0].aborted,true);
+ h.context.controller=new AbortController();h.context.fetch=async(path,{signal})=>new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(signal.reason)));
+ const api=h.run('api("uploads",{name:"Guest"},{signal:controller.signal})');h.context.controller.abort();await assert.rejects(api,{name:'AbortError'});
+});
+test('queue shows waiting versus transfer phases and exposes retry for active moments',async()=>{
+ const h=harness();await tick();h.run('renderQueue([{id:"one",name:"Guest",state:"uploading",phase:"ticket",progress:0},{id:"two",name:"Guest",state:"queued"}])');
+ assert.match(h.nodes['#queue-items'].innerHTML,/Meminta giliran/);assert.doesNotMatch(h.nodes['#queue-items'].innerHTML,/Mengunggah 0/);assert.match(h.nodes['#queue-items'].innerHTML,/data-retry="one"/);
+ h.run('renderQueue([{id:"one",name:"Guest",state:"uploading",phase:"waiting"}])');assert.match(h.nodes['#queue-items'].innerHTML,/Menunggu server/);
+ h.run('renderQueue([{id:"one",name:"Guest",state:"uploading",phase:"uploading",progress:42}])');assert.match(h.nodes['#queue-items'].innerHTML,/Mengunggah 42%/);
+});
+test('background and offline events pause the outbox; returning resumes it',async()=>{
+ const h=harness();await tick();let paused=0,resumed=0;h.context.paused=()=>paused++;h.context.resumed=()=>resumed++;
+ h.run('outbox.pause=paused;outbox.resume=async()=>resumed()');
+ h.events.pagehide();h.events.offline();h.context.document.hidden=true;h.events.visibilitychange();assert.equal(paused,3);
+ h.context.document.hidden=false;h.events.visibilitychange();await tick();assert.equal(resumed,1);
 });
 test('gallery uses only thumbnails and never requests full photo bytes for a missing thumbnail',async()=>{
  const h=harness();await tick();h.nodes['#media-type'].value='all';h.run('items=[{id:"a",name:"Guest <img>",mime:"image/jpeg",filter:"film",thumbnail:true},{id:"b",name:"Other",mime:"image/jpeg",filter:"original",thumbnail:false}];next=null;renderGallery()');

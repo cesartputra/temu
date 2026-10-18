@@ -15,6 +15,10 @@ test('queue completion is polled without reuploading bytes or creating another t
  const paths=[];let polls=0;const result=await transport.settled({id:'existing',token:'secret'},async(path,body)=>{paths.push(path);assert.equal(body.token,'secret');return path.endsWith('/complete')||polls++===0?{pending:true,retryAfter:6}:{id:'existing'};},{wait:async()=>{},random:()=>.5});
  assert.equal(result.id,'existing');assert.deepEqual(paths,['uploads/existing/complete','uploads/existing/status','uploads/existing/status']);
 });
+test('recovering an existing server job polls status directly even when new uploads are closed',async()=>{
+ const paths=[];const result=await transport.settled({id:'existing',token:'secret',pending:true},async path=>{paths.push(path);assert.ok(path.endsWith('/status'));return {ok:true,id:'existing'};});
+ assert.equal(result.id,'existing');assert.deepEqual(paths,['uploads/existing/status']);
+});
 test('quota errors are terminal and waiting can be cancelled',async()=>{
  let calls=0;await assert.rejects(transport.retry(async()=>{calls++;const e=Error('full');e.status=413;throw e;}),/full/);assert.equal(calls,1);
  const controller=new AbortController();controller.abort();await assert.rejects(transport.retry(async()=>{}, {signal:controller.signal}),{name:'AbortError'});

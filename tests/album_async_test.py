@@ -82,6 +82,26 @@ class AsyncQueueTests(unittest.TestCase):
         self.assertEqual(error.exception.status,429)
         self.queue(t);self.begin(12)
         with self.db.connect() as c:self.assertEqual(c.execute('SELECT count(*) FROM album_uploads').fetchone()[0],13)
+    def test_retry_finds_an_existing_finalization_or_published_item_without_uploading_again(self):
+        ticket=self.begin();self.queue(ticket)
+        pending=self.begin();self.assertTrue(pending['pending']);self.assertEqual(pending['id'],ticket['id']);self.assertEqual(pending['token'],ticket['token']);self.assertNotIn('url',pending)
+        album_jobs.process_next(self.a);self.config['uploadsOpen']=False
+        completed=self.begin();self.assertTrue(completed['completed']);self.assertEqual(completed['id'],ticket['id'])
+    def test_expired_ticket_is_renewed_with_same_request_id_and_old_bytes_remain_reserved(self):
+        ticket=self.begin();self.store.files[self.store.key('incoming',ticket['id'],'.jpg')]=(fixtures.PHOTO,'image/jpeg')
+        with self.db.connect() as c:c.execute('UPDATE album_uploads SET expires=? WHERE id=?',(int(time.time())+100,ticket['id']))
+        replacement=self.begin();self.assertNotEqual(replacement['id'],ticket['id']);self.assertIn(self.store.key('incoming',ticket['id'],'.jpg'),self.store.files)
+        with self.db.connect() as c:
+            self.assertEqual(c.execute('SELECT completed FROM album_uploads WHERE id=?',(ticket['id'],)).fetchone()[0],-1)
+            self.assertEqual(c.execute('SELECT item FROM album_requests WHERE request_id=?',(format(0,'032x'),)).fetchone()[0],replacement['id'])
+        self.queue(replacement);album_jobs.process_next(self.a)
+        with self.db.connect() as c:c.execute('UPDATE album_uploads SET expires=0 WHERE id=?',(ticket['id'],))
+        self.a.clean_uploads(self.store);self.assertTrue(self.begin()['completed']);self.assertEqual(self.a.public(self.config)['count'],1)
+    def test_admin_reset_and_explicit_cancellation_are_not_automatically_renewed(self):
+        ticket=self.begin();self.a.cancel_upload(self.handler({'token':ticket['token']}),ticket['id'])
+        with self.assertRaises(album.AlbumError) as error:self.begin()
+        self.assertEqual(error.exception.status,410)
+        with self.db.connect() as c:self.assertEqual(c.execute('SELECT count(*) FROM album_uploads').fetchone()[0],1)
     def test_completed_request_recovers_after_ticket_cleanup_without_duplicate_original(self):
         ticket=self.begin();self.queue(ticket);album_jobs.process_next(self.a)
         with self.db.connect() as c:c.execute('UPDATE album_uploads SET expires=0 WHERE id=?',(ticket['id'],))
