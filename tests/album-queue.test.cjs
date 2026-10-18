@@ -81,3 +81,14 @@ test('a stalled IndexedDB open times out and can reopen without changing the dat
  const first=queue.resume();await tick();t.mock.timers.tick(15000);await assert.rejects(first,/Penyimpanan browser tertahan/);
  await queue.enqueue(job('preserved'));await until(async()=>(await queue.list()).length===0);assert.ok(requests>=2);
 });
+test('legacy queue rows with two uploading flags recover in order without changing their original files',async()=>{
+ const indexedDB=new IDBFactory();
+ await new Promise((resolve,reject)=>{
+  const request=indexedDB.open('temu-album-outbox',1);
+  request.onupgradeneeded=()=>{const store=request.result.createObjectStore('files',{keyPath:'id'});for(let n=0;n<3;n++)store.add({...job(String(n)),created:n,state:n<2?'uploading':'queued',progress:0});};
+  request.onerror=()=>reject(request.error);request.onsuccess=()=>{request.result.close();resolve();};
+ });
+ const completed=[],queue=create({indexedDB,onSaved:r=>completed.push(r.id),send:async item=>{assert.equal(await item.blob.text(),'original photo bytes');return {id:item.id};}});
+ assert.deepEqual((await queue.list()).map(row=>row.state),['queued','queued','queued']);
+ await queue.resume();await until(()=>completed.length===3);assert.deepEqual(completed,['0','1','2']);assert.deepEqual(await queue.list(),[]);
+});
