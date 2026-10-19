@@ -44,14 +44,51 @@ test('returning after hours aborts a hung transfer and resumes original files wi
  assert.equal(oldSignal.aborted,true);assert.deepEqual(sent,['first','first','second']);assert.deepEqual(saved,['first','second']);
  await assert.rejects(oldSave({stage:'uploaded'}),{name:'AbortError'});finishOld({id:'stale'});await tick();assert.deepEqual(await queue.list(),[]);
 });
-test('pausing for the native camera cancels network work and keeps the persisted ticket for the next foreground session',async()=>{
+test('going offline cancels network work and keeps the persisted ticket for the next foreground session',async()=>{
  let signal,calls=0;const saved=[];
  const queue=create({indexedDB:new IDBFactory(),onSaved:r=>saved.push(r.id),send:async(item,save,progress,options)=>{
   calls++;if(calls===1){await save({ticket:{id:'existing',token:'private'},stage:'uploaded'});signal=options.signal;return new Promise(()=>{});}
   assert.equal(item.ticket.id,'existing');assert.equal(item.stage,'uploaded');return {id:item.id};
  }});
- await queue.enqueue(job('stable'));await until(()=>!!signal);queue.pause();await until(async()=>(await queue.list())[0]?.state==='queued');
+ await queue.enqueue(job('stable'));await until(()=>!!signal);queue.pause(true);await until(async()=>(await queue.list())[0]?.state==='queued');
  assert.equal(signal.aborted,true);assert.equal(calls,1);await queue.resume();await until(()=>saved.length===1);assert.equal(calls,2);
+});
+test('returning from the camera preserves the active request and progress even after a long suspension',async()=>{
+ let clock=0,signal,finish;const sent=[],completed=[];
+ const queue=create({indexedDB:new IDBFactory(),now:()=>clock,onSaved:r=>completed.push(r.id),send:async(item,save,progress,options)=>{
+  sent.push(item.id);if(sent.length===1){await save({phase:'uploading'});progress(60);signal=options.signal;return new Promise(resolve=>finish=resolve);}return {id:item.id};
+ }});
+ await queue.enqueue(job('first'));await until(()=>!!signal);queue.pause();await queue.enqueue(job('second'));
+ clock=3*60*60*1000;await queue.resume();assert.equal(signal.aborted,false);assert.deepEqual(sent,['first']);assert.equal((await queue.list())[0].progress,60);
+ finish({id:'first'});await until(()=>completed.length===2);assert.deepEqual(sent,['first','second']);assert.deepEqual(completed,['first','second']);
+});
+test('an in-flight upload can finish while the camera is open, without starting the next queued photo',async()=>{
+ let signal,finish;const sent=[],completed=[];
+ const queue=create({indexedDB:new IDBFactory(),onSaved:r=>completed.push(r.id),send:async(item,save,progress,options)=>{
+  sent.push(item.id);if(sent.length===1){signal=options.signal;return new Promise(resolve=>finish=resolve);}return {id:item.id};
+ }});
+ await queue.enqueue(job('first'));await until(()=>!!signal);queue.pause();await queue.enqueue(job('second'));finish({id:'first'});
+ await until(()=>completed.length===1);assert.equal(signal.aborted,false);assert.deepEqual(sent,['first']);assert.equal((await queue.list())[0].id,'second');
+ await queue.resume();await until(()=>completed.length===2);assert.deepEqual(sent,['first','second']);
+});
+test('a genuine network failure during camera use is retried on return with the original ID and file',async()=>{
+ let fail,calls=0;const completed=[];
+ const queue=create({indexedDB:new IDBFactory(),onSaved:r=>completed.push(r.id),send:async(item,save)=>{
+  calls++;if(calls===1){await save({ticket:{id:'remote'},stage:'uploaded'});return new Promise((resolve,reject)=>fail=reject);}
+  assert.equal(item.id,'stable');assert.equal(item.ticket.id,'remote');assert.equal(item.stage,'uploaded');assert.equal(await item.blob.text(),'original photo bytes');return {id:item.id};
+ }});
+ await queue.enqueue(job('stable'));await until(()=>!!fail);queue.pause();fail(Object.assign(Error('Network disconnected'),{status:0}));
+ await until(async()=>(await queue.list())[0]?.state==='failed');await queue.resume();await until(()=>completed.length===1);assert.equal(calls,2);assert.deepEqual(completed,['stable']);
+});
+test('a transfer that remains silent after returning gets foreground time to recover before the watchdog releases it',async t=>{
+ t.mock.timers.enable({apis:['setInterval']});let clock=0,signal;const completed=[];
+ const queue=create({indexedDB:new IDBFactory(),now:()=>clock,onSaved:r=>completed.push(r.id),send:async(item,save,progress,options)=>{
+  if(item.id==='stuck'){signal=options.signal;return new Promise(()=>{});}return {id:item.id};
+ }});
+ await queue.enqueue(job('stuck'));await until(()=>!!signal);queue.pause();await queue.enqueue(job('next'));clock=180000;await queue.resume();
+ clock+=10000;t.mock.timers.tick(10000);await tick();assert.equal(signal.aborted,false);
+ clock+=51000;t.mock.timers.tick(10000);await until(()=>completed.length===1);assert.equal(signal.aborted,true);assert.deepEqual(completed,['next']);
+ const rows=await queue.list();assert.equal(rows[0].id,'stuck');assert.equal(rows[0].state,'failed');
 });
 test('expired claims can be recovered by another tab and the old tab cannot overwrite or delete its result',async()=>{
  const indexedDB=new IDBFactory();let clock=0,oldSave,finishOld;const completed=[];

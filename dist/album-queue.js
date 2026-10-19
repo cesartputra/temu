@@ -26,7 +26,9 @@ function create({indexedDB=root.indexedDB,name='temu-album-outbox',send,onChange
  const update=(id,change)=>transaction('readwrite',(store,done)=>{const r=store.get(id);r.onsuccess=()=>{const row=r.result;if(!row)return done(false);const next=change(row);if(next===false)return done(false);if(next===null)store.delete(id);else store.put(next);done(true);};});
  async function list(){return transaction('readonly',(store,done)=>{
   const rows=[],request=store.openCursor();request.onsuccess=()=>{const cursor=request.result;if(!cursor){done(rows.sort((a,b)=>a.created-b.created));return;}
-   const {blob,ticket,...row}=cursor.value;if(row.state==='uploading'&&(!row.attempt||row.leaseUntil<=now()))row.state='queued';rows.push(row);cursor.continue();};
+   const {blob,ticket,...row}=cursor.value;if(row.state==='uploading'&&(!row.attempt||row.leaseUntil<=now()))row.state='queued';
+   if(row.state==='uploading'&&row.attempt===active?.attempt&&row.phase==='uploading')row.progress=active.progress||0;
+   rows.push(row);cursor.continue();};
  });}
  function notify(rows,error){lastRows=rows;onChange(rows,error);}
  async function changed(){notify(await list());}
@@ -56,20 +58,20 @@ function create({indexedDB=root.indexedDB,name='temu-album-outbox',send,onChange
     const job=await claim();if(!job)break;
     const context={id:job.id,attempt:job.attempt,last:now(),renewed:now(),controller:new AbortController()};active=context;
     const signal=context.controller.signal;
-    if(paused||root.navigator?.onLine===false||root.document?.hidden)context.controller.abort(abort('Unggahan dijeda; file tetap tersimpan di HP.',true));
     const owned=change=>update(job.id,row=>row.attempt===job.attempt?change(row):false);
-    const save=async patch=>{if(signal.aborted)throw signal.reason;const saved=await owned(row=>signal.aborted?false:{...row,...patch,leaseUntil:now()+leaseMs});if(!saved)throw abort('Unggahan dilanjutkan di tab lain.');context.last=context.renewed=now();await changed();};
+    const save=async patch=>{if(signal.aborted)throw signal.reason;if(patch.phase==='uploading')context.progress=0;const saved=await owned(row=>signal.aborted?false:{...row,...patch,leaseUntil:now()+leaseMs});if(!saved)throw abort('Unggahan dilanjutkan di tab lain.');context.last=context.renewed=now();await changed();};
     let stopped;const interrupted=new Promise((resolve,reject)=>{stopped=()=>reject(signal.reason);if(signal.aborted)stopped();else signal.addEventListener('abort',stopped,{once:true});});interrupted.catch(()=>{});
     try{
      await changed();
      if(signal.aborted)throw signal.reason;
-     const progress=value=>{if(signal.aborted)return;context.last=now();notify(lastRows.map(row=>row.id===job.id?{...row,phase:'uploading',progress:value}:row));};
+     if(paused||root.navigator?.onLine===false||root.document?.hidden)throw abort('Unggahan dijeda; file tetap tersimpan di HP.',true);
+     const progress=value=>{if(signal.aborted)return;context.last=now();context.progress=value;notify(lastRows.map(row=>row.id===job.id?{...row,phase:'uploading',progress:value}:row));};
      const result=await Promise.race([send(job,save,progress,{signal}),interrupted]);
      if(signal.aborted)throw signal.reason;
      if(await owned(()=>null)){await changed();onSaved(result);}
     }catch(error){
      const failure=signal.aborted?signal.reason:error;
-     await owned(row=>({...row,state:failure.requeue?'queued':'failed',attempt:null,leaseUntil:0,recoverable:!!failure.recoverable,error:failure.message||'Unggahan belum selesai. Coba lagi.'}));await changed();
+     await owned(row=>({...row,state:failure.requeue?'queued':'failed',attempt:null,leaseUntil:0,recoverable:!!failure.recoverable||[0,429,502,503,504].includes(failure.status),error:failure.message||'Unggahan belum selesai. Coba lagi.'}));await changed();
     }finally{signal.removeEventListener('abort',stopped);if(active===context)active=null;}
    }
   }catch(error){notify(lastRows,error);}finally{running=false;}
@@ -81,14 +83,18 @@ function create({indexedDB=root.indexedDB,name='temu-album-outbox',send,onChange
   await changed();void pump();
  }
  async function discard(id){await update(id,row=>row.state==='failed'?null:false);await changed();}
- function pause(){paused=true;active?.controller.abort(abort('Unggahan dijeda; file tetap tersimpan di HP.',true));}
+ function pause(cancel=false){paused=true;if(cancel)active?.controller.abort(abort('Koneksi terputus; file tetap tersimpan di HP.',true));}
  async function check(restart=false){
   if(active&&!active.controller.signal.aborted){
    if(now()-active.last>=stallMs)active.controller.abort(abort('Unggahan tidak bergerak selama satu menit. File tetap tersimpan; ketuk Coba lagi.',restart));
    else if(now()-active.renewed>=20000){const current=active;current.renewed=now();if(!await update(current.id,row=>row.attempt===current.attempt?{...row,leaseUntil:now()+leaseMs}:false))current.controller.abort(abort('Unggahan dilanjutkan di tab lain.'));}
   }
  }
- async function resume(){paused=false;await check(true);for(const row of await list())if(row.state==='failed'&&row.recoverable)await update(row.id,current=>current.state==='failed'&&current.recoverable?{...current,state:'queued',error:''}:false);await changed();void pump();}
+ async function resume(){
+  // Let suspended network callbacks run before treating camera time as a stall.
+  if(paused&&active)active.last=now();paused=false;await check(true);
+  for(const row of await list())if(row.state==='failed'&&row.recoverable)await update(row.id,current=>current.state==='failed'&&current.recoverable?{...current,state:'queued',error:''}:false);await changed();void pump();
+ }
  const timer=setInterval(()=>{if(!paused&&!root.document?.hidden)check().then(()=>pump()).catch(error=>notify(lastRows,error));},10000);timer.unref?.();
  return {enqueue,list,retry,discard,resume,pump,pause};
 }

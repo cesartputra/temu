@@ -5,7 +5,7 @@ function harness({lightroom=[]}={}){
  const make=()=>({hidden:false,disabled:false,value:'',textContent:'',style:{},attributes:{},childElementCount:0,classList:{toggle(){},add(){},remove(){}},setCustomValidity(v){this.validationMessage=v;},reportValidity(){},getBoundingClientRect:()=>({width:360,height:480}),focus(){this.focused=true;},showModal(){this.open=true;},close(){this.open=false;this.listeners?.close?.();},getAttribute(k){return this[k]??null;},setAttribute(k,v){this.attributes[k]=v;},removeAttribute(k){delete this[k];},pause(){},click(){this.clicked=true;},addEventListener(name,fn){(this.listeners??={})[name]=fn;},querySelectorAll(){return [];}});
  const document={body:make(),hidden:false,addEventListener:(name,fn)=>events[name]=fn,querySelector:s=>nodes[s]??=make(),querySelectorAll:s=>s==='[data-filter]'?['original','film','warm','mono','dazz'].map(filter=>Object.assign(nodes[filter]??=make(),{dataset:{filter}})):s==='[data-story-overlay]'?['celebration','monogram','none'].map(storyOverlay=>Object.assign(nodes[storyOverlay]??=make(),{dataset:{storyOverlay}})):[]};
  const config={title:'Reva & Cesar',count:0,uploadsOpen:true,revealed:true,filter:'film',storage:'s3'};
- const context={TemuAlbumLoading:require('../dist/album-loading.js'),document,window:{matchMedia:()=>({matches:false}),addEventListener:(name,fn)=>events[name]=fn},navigator:{canShare:()=>true,share:async value=>shared.push(value)},setTimeout(fn,ms){timers.push({fn,ms});},location:{hash:'',pathname:'/album'},history:{replaceState(){}},fetch:async()=>({ok:true,json:async()=>config,blob:async()=>new Blob(['original bytes'])}),URL:{createObjectURL:()=> 'blob:moment',revokeObjectURL:u=>revoked.push(u)},URLSearchParams,TemuAlbumPresets:{load:async()=>lightroom,has:id=>lightroom.some(p=>p.id===id),get:id=>lightroom.find(p=>p.id===id)},TemuAlbumPhoto:{preview:async()=>new Blob(['filtered preview'],{type:'image/png'}),story:async()=>new Blob(['story'],{type:'image/png'}),thumbnail:async()=>new Blob(['thumbnail'],{type:'image/jpeg'})},TemuAlbumUpload:require('../dist/album-upload.js'),TemuAlbumQueue:{create(options){queueOptions=options;return {resume:async()=>{},enqueue:async job=>queued.push(job),retry:async()=>{},discard:async()=>{}};}},crypto:require('node:crypto').webcrypto,AbortController,sessionStorage:{getItem(){return null;},removeItem(){}},setInterval(){},Date,AbortSignal,Blob,confirm:()=>true};
+ const context={TemuAlbumLoading:require('../dist/album-loading.js'),document,window:{matchMedia:()=>({matches:false}),addEventListener:(name,fn)=>events[name]=fn},navigator:{canShare:()=>true,share:async value=>shared.push(value)},setTimeout(fn,ms){timers.push({fn,ms});},location:{hash:'',pathname:'/album'},history:{replaceState(){}},fetch:async()=>({ok:true,json:async()=>config,blob:async()=>new Blob(['original bytes'])}),URL:{createObjectURL:()=> 'blob:moment',revokeObjectURL:u=>revoked.push(u)},URLSearchParams,TemuAlbumPresets:{load:async()=>lightroom,has:id=>lightroom.some(p=>p.id===id),get:id=>lightroom.find(p=>p.id===id)},TemuAlbumPhoto:{preview:async()=>new Blob(['filtered preview'],{type:'image/png'}),story:async()=>new Blob(['story'],{type:'image/png'}),thumbnail:async()=>new Blob(['thumbnail'],{type:'image/jpeg'})},TemuAlbumUpload:require('../dist/album-upload.js'),TemuAlbumQueue:{create(options){queueOptions=options;return {pause(){},resume:async()=>{},enqueue:async job=>queued.push(job),retry:async()=>{},discard:async()=>{}};}},crypto:require('node:crypto').webcrypto,AbortController,sessionStorage:{getItem(){return null;},removeItem(){}},setInterval(){},Date,AbortSignal,Blob,confirm:()=>true};
  vm.runInNewContext(source,context);return {nodes,revoked,queued,timers,shared,events,saves,context,config,get queueOptions(){return queueOptions;},run:s=>vm.runInNewContext(s,context)};
 }
 test('photo and video buttons invoke native capture inputs; canceling retake preserves the previous photo',async()=>{
@@ -75,11 +75,37 @@ test('queue shows waiting versus transfer phases and exposes retry for active mo
  h.run('renderQueue([{id:"one",name:"Guest",state:"uploading",phase:"waiting"}])');assert.match(h.nodes['#queue-items'].innerHTML,/Menunggu server/);
  h.run('renderQueue([{id:"one",name:"Guest",state:"uploading",phase:"uploading",progress:42}])');assert.match(h.nodes['#queue-items'].innerHTML,/Mengunggah 42%/);
 });
-test('background and offline events pause the outbox; returning resumes it',async()=>{
+test('camera/background events keep active transfers, while offline cancels them; returning resumes the outbox',async()=>{
+ const h=harness();await tick();const paused=[];let resumed=0;h.context.paused=cancel=>paused.push(cancel);h.context.resumed=()=>resumed++;
+ h.run('outbox.pause=paused;outbox.resume=async()=>resumed()');
+ h.events.pagehide();h.events.offline();h.context.document.hidden=true;h.events.visibilitychange();assert.deepEqual(paused,[undefined,true,undefined]);
+ h.context.document.hidden=false;h.events.visibilitychange();await tick();assert.equal(resumed,1);
+});
+test('finishing or cancelling native capture resumes uploads even without a visibility event',async()=>{
  const h=harness();await tick();let paused=0,resumed=0;h.context.paused=()=>paused++;h.context.resumed=()=>resumed++;
  h.run('outbox.pause=paused;outbox.resume=async()=>resumed()');
- h.events.pagehide();h.events.offline();h.context.document.hidden=true;h.events.visibilitychange();assert.equal(paused,3);
- h.context.document.hidden=false;h.events.visibilitychange();await tick();assert.equal(resumed,1);
+ h.nodes['#take-photo'].onclick();h.nodes['#native-photo'].listeners.cancel();
+ h.nodes['#take-video'].onclick();h.nodes['#native-video'].onchange({target:{files:[]}});
+ h.events.focus();await tick();assert.equal(paused,2);assert.equal(resumed,3);
+});
+test('capturing the next photo keeps the same live XHR and publishes both originals exactly once',async()=>{
+ const h=harness();await tick();const transfers=[],completed=[];let tickets=0;
+ const until=async check=>{for(let n=0;n<100;n++){if(await check())return;await tick();}assert.fail('uploads did not settle');};
+ h.context.XMLHttpRequest=class{
+  constructor(){this.upload={};}open(){}setRequestHeader(){}send(blob){this.blob=blob;transfers.push(this);}
+  abort(){this.aborted=true;this.onabort?.();}
+ };
+ h.context.fetch=async path=>({ok:true,json:async()=>path.endsWith('/uploads')?{id:'remote'+(++tickets),token:'token',url:'https://storage/upload',headers:{}}:{id:path.split('/')[4],thumbnailKey:'thumb'}});
+ const queue=require('../dist/album-queue.js').create({indexedDB:new(require('fake-indexeddb').IDBFactory)(),send:h.queueOptions.send,onChange:h.queueOptions.onChange,onSaved:r=>completed.push(r.id)});
+ h.context.realQueue=queue;h.run('outbox.enqueue=job=>realQueue.enqueue(job);outbox.pause=cancel=>realQueue.pause(cancel);outbox.resume=()=>realQueue.resume()');
+ const first=new Blob(['first original'],{type:'image/jpeg'}),second=new Blob(['second original'],{type:'image/jpeg'});
+ h.nodes['#guest-name'].value='Guest';h.context.first=first;h.run('selectFile(first)');await h.nodes['#upload-form'].onsubmit({preventDefault(){}});await until(()=>transfers.length===1);
+ transfers[0].upload.onprogress({lengthComputable:true,loaded:6,total:10});h.nodes['#take-photo'].onclick();h.context.document.hidden=true;h.events.visibilitychange();h.events.pagehide();
+ h.context.document.hidden=false;h.nodes['#native-photo'].onchange({target:{files:[second]}});h.events.visibilitychange();
+ await h.nodes['#upload-form'].onsubmit({preventDefault(){}});assert.equal(transfers.length,1);assert.notEqual(transfers[0].aborted,true);assert.equal((await queue.list())[0].progress,60);
+ transfers[0].status=200;transfers[0].onload();await until(()=>transfers.length===2);
+ transfers[1].status=200;transfers[1].onload();await until(()=>completed.length===2);
+ assert.deepEqual(completed,['remote1','remote2']);assert.equal(await transfers[0].blob.text(),'first original');assert.equal(await transfers[1].blob.text(),'second original');assert.deepEqual(await queue.list(),[]);
 });
 test('gallery uses only thumbnails and never requests full photo bytes for a missing thumbnail',async()=>{
  const h=harness();await tick();h.nodes['#media-type'].value='all';h.run('items=[{id:"a",name:"Guest <img>",mime:"image/jpeg",filter:"film",thumbnail:true},{id:"b",name:"Other",mime:"image/jpeg",filter:"original",thumbnail:false}];next=null;renderGallery()');

@@ -97,8 +97,13 @@ function selectFile(f,front=false){
  const media=photo?$('#photo-preview'):$('#video-preview');media.src=previewURL;media.onload=media.onloadedmetadata=layout;
  $('#placeholder').hidden=true;captureState();choosePreset(preset);layout();notice('');
 }
-function openCamera(kind,facing='environment'){if(enqueuing||!info?.uploadsOpen)return;const input=$('#native-'+kind);captureFacing=facing;input.setAttribute('capture',facing);input.value='';input.click();}
-for(const kind of ['photo','video']){$('#take-'+kind).onclick=()=>openCamera(kind);$('#native-'+kind).onchange=event=>selectFile(event.target.files[0],kind==='photo'&&captureFacing==='user');}
+function resumeUploads(){if(info)outbox.resume().catch(e=>notice(e.message,true));}
+function openCamera(kind,facing='environment'){if(enqueuing||!info?.uploadsOpen)return;const input=$('#native-'+kind);captureFacing=facing;input.setAttribute('capture',facing);input.value='';outbox.pause();input.click();}
+for(const kind of ['photo','video']){
+ $('#take-'+kind).onclick=()=>openCamera(kind);
+ $('#native-'+kind).onchange=event=>{selectFile(event.target.files[0],kind==='photo'&&captureFacing==='user');resumeUploads();};
+ $('#native-'+kind).addEventListener('cancel',resumeUploads);
+}
 $('#take-selfie').onclick=()=>openCamera('photo','user');
 $('#mirror-photo').onclick=()=>{if(enqueuing||!file?.type.startsWith('image/'))return;mirrorPhoto=!mirrorPhoto;captureState();};
 function clearPreview(){filterVersion++;if(filteredURL){URL.revokeObjectURL(filteredURL);filteredURL=null;}$('#filter-note').textContent='';file=null;mirrorPhoto=frontPhoto=false;$('#photo-preview').hidden=$('#video-preview').hidden=true;$('#video-preview').pause();for(const media of [$('#photo-preview'),$('#video-preview')])media.removeAttribute('src');$('#placeholder').hidden=false;if(previewURL)URL.revokeObjectURL(previewURL);previewURL=null;captureState();layout();}
@@ -175,10 +180,9 @@ async function resumePending(){
  let saved;try{saved=JSON.parse(sessionStorage.getItem('temu-album-pending'));}catch{}if(!saved?.id||!saved?.token)return;
  try{await TemuAlbumUpload.settled(saved,api);sessionStorage.removeItem('temu-album-pending');applyInfo(await api('info'));}catch(e){notice(e.message,true);}
 }
-window.addEventListener('online',()=>{if(info)outbox.resume().catch(e=>notice(e.message,true));});
-window.addEventListener('pageshow',()=>{if(info)outbox.resume().catch(e=>notice(e.message,true));});
-window.addEventListener('pagehide',()=>outbox.pause());window.addEventListener('offline',()=>outbox.pause());
-document.addEventListener('visibilitychange',()=>{if(document.hidden)outbox.pause();else if(info)outbox.resume().catch(e=>notice(e.message,true));});
+for(const event of ['online','pageshow','focus'])window.addEventListener(event,resumeUploads);
+window.addEventListener('pagehide',()=>outbox.pause());window.addEventListener('offline',()=>outbox.pause(true));
+document.addEventListener('visibilitychange',()=>{if(document.hidden)outbox.pause();else resumeUploads();});
 window.addEventListener('resize',layout);
 window.addEventListener('beforeunload',event=>{if(enqueuing||file||queueRows.length){event.preventDefault();event.returnValue='';}});
 function renderGallery(){
