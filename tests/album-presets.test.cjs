@@ -46,3 +46,14 @@ test('catalog rejects an external or traversing LUT path',async()=>{
  const h=harness({manifest:{size:17,presets:[{...catalog.presets[0],lut:'../private.lut'}]}});
  await assert.rejects(h.api.load(),/tidak valid/);assert.equal(h.requests.length,1);
 });
+test('server thumbnail LUT, grain and vignette match the browser preset pixels',async()=>{
+ const {spawnSync}=require('node:child_process');const h=harness();await h.api.load();
+ const cases=[];
+ for(const id of ['lr-fuji1','lr-custom-bnw-daylight',catalog.presets.find(p=>p.grain&&p.vignette).id]){
+  const rgb=Array.from({length:16*3},(_,n)=>(n*41)%256),rgba=rgb.flatMap((value,n)=>n%3===2?[value,255]:[value]);const image=pixels(rgba);await h.api.apply(image.ctx,4,4,id);
+  cases.push({id,rgb,expected:[...image.data].filter((_,n)=>n%4!==3)});
+ }
+ const script="import json,sys;sys.path.insert(0,'server');import album_photo;cases=json.load(sys.stdin);print(json.dumps([list(album_photo.apply_preset(bytes(c['rgb']),4,4,c['id'])) for c in cases]))";
+ const result=spawnSync('python3',['-c',script],{input:JSON.stringify(cases),encoding:'utf8'});assert.equal(result.status,0,result.stderr);
+ JSON.parse(result.stdout).forEach((pixels,n)=>pixels.forEach((value,i)=>assert.ok(Math.abs(value-cases[n].expected[i])<=1,`${cases[n].id} pixel ${i}: ${value} vs ${cases[n].expected[i]}`)));
+});

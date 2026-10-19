@@ -167,14 +167,16 @@ def start_worker(album,stop):
         if album.video_thread is not None:return album.video_thread
         if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
             print('Video preview worker unavailable: install ffmpeg and ffprobe; originals retained.',flush=True);return None
-        for directory in album.directory.glob('.video-*'):
+        for directory in (*album.directory.glob('.video-*'),*album.directory.glob('.photo-*')):
             try:
                 if directory.is_dir() and directory.stat().st_mtime<time.time()-LEASE:shutil.rmtree(directory)
             except OSError:pass
         def work():
+            import album_photo
             while not stop.is_set():
                 try:
-                    if not process_next(album,stop):stop.wait(3)
+                    photo=album_photo.process_next(album,stop)
+                    if not process_next(album,stop) and not photo:stop.wait(3)
                 except (sqlite3.Error,OSError):
                     # A temporary database fault must not stop future previews.
                     print('Video preview worker paused; originals retained.',flush=True);stop.wait(10)

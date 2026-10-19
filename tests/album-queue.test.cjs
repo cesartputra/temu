@@ -4,6 +4,13 @@ const {create}=require('../dist/album-queue.js');
 const tick=()=>new Promise(setImmediate);
 async function until(check){for(let n=0;n<100;n++){if(await check())return;await tick();}assert.fail('queue did not settle');}
 const job=id=>({id,blob:new Blob(['original photo bytes'],{type:'image/jpeg'}),name:'Guest',caption:'Hello',filter:'film'});
+test('resuming a legacy failed thumbnail clears the published row and lets the next originals proceed',async()=>{
+ const indexedDB=new IDBFactory(),sent=[];
+ const old=create({indexedDB,send:async(item,save)=>{await save({result:{id:'already-saved'}});throw Error('Foto belum dapat dibaca.');}});
+ await old.enqueue(job('first'));await until(async()=>(await old.list())[0]?.state==='failed');
+ const queue=create({indexedDB,send:async item=>{if(item.result)return item.result;sent.push(item.id);return {id:item.id};}});
+ await queue.enqueue(job('second'));await queue.enqueue(job('third'));await queue.resume();await until(async()=>(await queue.list()).length===0);assert.deepEqual(sent,['second','third']);
+});
 test('durable enqueue frees capture while one upload runs, preserving original bytes and independent metadata',async()=>{
  const indexedDB=new IDBFactory(),sent=[],finished=[];let release;
  const queue=create({indexedDB,send:async(item,save)=>{sent.push(item);if(sent.length===1)await new Promise(resolve=>release=resolve);return {id:item.id};},onSaved:r=>finished.push(r)});

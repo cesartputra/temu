@@ -93,7 +93,7 @@ function create({indexedDB=root.indexedDB,name='temu-album-outbox',send,onChange
  async function resume(){
   // Let suspended network callbacks run before treating camera time as a stall.
   if(paused&&active)active.last=now();paused=false;await check(true);
-  for(const row of await list())if(row.state==='failed'&&row.recoverable)await update(row.id,current=>current.state==='failed'&&current.recoverable?{...current,state:'queued',error:''}:false);await changed();void pump();
+  for(const row of await list())if(row.state==='failed'&&(row.recoverable||row.result))await update(row.id,current=>current.state==='failed'&&(current.recoverable||current.result)?{...current,state:'queued',error:''}:false);await changed();void pump();
  }
  const timer=setInterval(()=>{if(!paused&&!root.document?.hidden)check().then(()=>pump()).catch(error=>notify(lastRows,error));},10000);timer.unref?.();
  return {enqueue,list,retry,discard,resume,pump,pause};

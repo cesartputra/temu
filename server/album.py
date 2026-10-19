@@ -1,6 +1,6 @@
 """Shared guest album: original files, bounded streaming uploads, timed reveal."""
 import hmac, json, os, re, secrets, tempfile, threading, tarfile, shutil, time
-import album_storage, album_jobs, album_video
+import album_storage, album_jobs, album_video, album_photo
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
@@ -85,7 +85,7 @@ class Album:
             CREATE TABLE IF NOT EXISTS album_uploads(id TEXT PRIMARY KEY,token TEXT NOT NULL,name TEXT NOT NULL,caption TEXT NOT NULL,filter TEXT NOT NULL,mime TEXT NOT NULL,size INTEGER NOT NULL,expires INTEGER NOT NULL,completed INTEGER NOT NULL DEFAULT 0);''')
             c.execute('INSERT OR IGNORE INTO app_secrets(name,value) VALUES(?,?)',('album-thumbnails',secrets.token_urlsafe(48)))
             self.thumbnail_secret=c.execute('SELECT value FROM app_secrets WHERE name=?',('album-thumbnails',)).fetchone()[0]
-        album_jobs.initialize(self);album_video.initialize(self)
+        album_jobs.initialize(self);album_video.initialize(self);album_photo.initialize(self)
     def config(self):
         with self.db.connect() as c:row=c.execute('SELECT config FROM album_settings WHERE id=1').fetchone()
         return json.loads(row[0]) if row else None
@@ -117,9 +117,13 @@ class Album:
     def list_items(self,config,offset=0,admin=False):
         if not admin and not self.opened(config):raise AlbumError('Galeri belum dibuka. Momenmu tetap tersimpan dengan aman.',403)
         with self.db.connect() as c:
-            rows=c.execute('SELECT i.id,i.name,i.caption,i.filter,i.mime,i.size,i.created,o.thumbnail_key FROM album_items i LEFT JOIN album_objects o ON i.id=o.id WHERE hidden=0 ORDER BY created DESC,i.id DESC LIMIT 25 OFFSET ?',(offset,)).fetchall()
+            rows=c.execute("SELECT i.id,i.name,i.caption,i.filter,i.mime,i.size,i.created,o.thumbnail_key,coalesce(p.state,'queued') FROM album_items i LEFT JOIN album_objects o ON i.id=o.id LEFT JOIN album_photo_jobs p ON p.id=i.id WHERE hidden=0 ORDER BY created DESC,i.id DESC LIMIT 25 OFFSET ?",(offset,)).fetchall()
         keys=('id','name','caption','filter','mime','size','created')
-        return {'items':[{**dict(zip(keys,row[:7])),'thumbnail':bool(row[7]) or (self.directory/(row[0]+'.thumb.jpg')).is_file()} for row in rows[:24]],'next':offset+24 if len(rows)>24 else None}
+        items=[]
+        for row in rows[:24]:
+            thumbnail=bool(row[7]) or (self.directory/(row[0]+'.thumb.jpg')).is_file()
+            items.append({**dict(zip(keys,row[:7])),'thumbnail':thumbnail,'thumbnailPending':row[4].startswith('image/') and not thumbnail and row[8]!='failed'})
+        return {'items':items,'next':offset+24 if len(rows)>24 else None}
     def read_body(self,h):
         size=int(h.headers.get('Content-Length','0'))
         if not 0<size<=4096:raise AlbumError('Permintaan unggahan tidak valid.')
@@ -356,6 +360,7 @@ class Album:
                     if c.execute('SELECT 1 FROM album_objects WHERE id=?',(identifier,)).fetchone():self.storage().delete(preview[0])
                     else:(self.directory/preview[0]).unlink(missing_ok=True)
                 c.execute('DELETE FROM album_video_jobs WHERE id=?',(identifier,))
+                c.execute('DELETE FROM album_photo_jobs WHERE id=?',(identifier,))
                 obj=c.execute('SELECT object_key,thumbnail_key FROM album_objects WHERE id=?',(identifier,)).fetchone()
                 if obj:
                     store=self.storage()

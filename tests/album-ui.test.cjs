@@ -6,7 +6,7 @@ function harness({lightroom=[]}={}){
  const document={body:make(),hidden:false,addEventListener:(name,fn)=>events[name]=fn,querySelector:s=>nodes[s]??=make(),querySelectorAll:s=>s==='[data-filter]'?['original','film','warm','mono','dazz'].map(filter=>Object.assign(nodes[filter]??=make(),{dataset:{filter}})):s==='[data-story-overlay]'?['celebration','monogram','none'].map(storyOverlay=>Object.assign(nodes[storyOverlay]??=make(),{dataset:{storyOverlay}})):[]};
  const config={title:'Reva & Cesar',count:0,uploadsOpen:true,revealed:true,filter:'film',storage:'s3'};
  const context={TemuAlbumLoading:require('../dist/album-loading.js'),document,window:{matchMedia:()=>({matches:false}),addEventListener:(name,fn)=>events[name]=fn},navigator:{canShare:()=>true,share:async value=>shared.push(value)},setTimeout(fn,ms){timers.push({fn,ms});},location:{hash:'',pathname:'/album'},history:{replaceState(){}},fetch:async()=>({ok:true,json:async()=>config,blob:async()=>new Blob(['original bytes'])}),URL:{createObjectURL:()=> 'blob:moment',revokeObjectURL:u=>revoked.push(u)},URLSearchParams,TemuAlbumPresets:{load:async()=>lightroom,has:id=>lightroom.some(p=>p.id===id),get:id=>lightroom.find(p=>p.id===id)},TemuAlbumPhoto:{preview:async()=>new Blob(['filtered preview'],{type:'image/png'}),story:async()=>new Blob(['story'],{type:'image/png'}),thumbnail:async()=>new Blob(['thumbnail'],{type:'image/jpeg'})},TemuAlbumUpload:require('../dist/album-upload.js'),TemuAlbumQueue:{create(options){queueOptions=options;return {pause(){},resume:async()=>{},enqueue:async job=>queued.push(job),retry:async()=>{},discard:async()=>{}};}},crypto:require('node:crypto').webcrypto,AbortController,sessionStorage:{getItem(){return null;},removeItem(){}},setInterval(){},Date,AbortSignal,Blob,confirm:()=>true};
- context.clearTimeout=()=>{};
+ context.clearTimeout=()=>{};context.intervals=[];context.setInterval=(fn,ms)=>context.intervals.push({fn,ms});
  vm.runInNewContext(source,context);return {nodes,revoked,queued,timers,shared,events,saves,context,config,get queueOptions(){return queueOptions;},run:s=>vm.runInNewContext(s,context)};
 }
 test('photo and video buttons invoke native capture inputs; canceling retake preserves the previous photo',async()=>{
@@ -38,16 +38,21 @@ test('S3 transfer uses original bytes, frozen filter metadata and only signed PU
  h.context.fetch=async(path,options)=>{requests.push({path,options});return {ok:true,json:async()=>path.endsWith('/uploads')?{id:'remote',token:'token',url:'https://s3.example/upload',headers:{'Content-Type':'image/jpeg'}}:{id:'remote',thumbnailKey:'thumbnail-token'}};};
  h.context.capturePut=(...args)=>{puts.push(args);return null;};h.run('putFile=async(...args)=>capturePut(...args)');
  const result=await h.run('sendQueued({id:"stable",blob:original,name:"Guest",caption:"hello",filter:"mono"},async patch=>globalThis.patches.push(patch),()=>{})');
- assert.equal(puts[0][2],original);assert.deepEqual(Object.keys(puts[0][1]),['Content-Type']);assert.equal(JSON.parse(requests[0].options.body).filter,'mono');assert.equal(JSON.parse(requests[0].options.body).requestId,'stable');assert.equal(requests.at(-1).path,'/api/album/thumbnail/remote');assert.equal(result.id,'remote');
+ assert.equal(puts[0][2],original);assert.deepEqual(Object.keys(puts[0][1]),['Content-Type']);assert.equal(JSON.parse(requests[0].options.body).filter,'mono');assert.equal(JSON.parse(requests[0].options.body).requestId,'stable');assert.equal(puts.length,1);assert.equal(result.id,'remote');assert.ok(!requests.some(r=>r.path.includes('/thumbnail/')));
 });
 test('recovered server jobs are polled without PUT, and published originals only need their thumbnail',async()=>{
  const h=harness();await tick();const paths=[];h.context.original=new Blob(['original'],{type:'image/jpeg'});
  h.run('putFile=()=>{throw Error("must not upload twice")}');
  h.context.fetch=async path=>{paths.push(path);return {ok:true,json:async()=>path.endsWith('/uploads')?{id:'same',token:'token',pending:true,state:'running'}:{id:'same',thumbnailKey:'thumb'}};};
  const result=await h.run('sendQueued({id:"stable",blob:original,name:"Guest",filter:"film"},async()=>{},()=>{})');
- assert.equal(result.id,'same');assert.ok(paths.includes('/api/album/uploads/same/status'));assert.ok(!paths.includes('/api/album/uploads/same/complete'));assert.ok(paths.includes('/api/album/thumbnail/same'));
+ assert.equal(result.id,'same');assert.ok(paths.includes('/api/album/uploads/same/status'));assert.ok(!paths.includes('/api/album/uploads/same/complete'));assert.ok(!paths.includes('/api/album/thumbnail/same'));
  paths.length=0;await h.run('sendQueued({id:"stable",blob:original,name:"Guest",filter:"film",result:{id:"same",thumbnailKey:"thumb"}},async()=>{},()=>{})');
- assert.deepEqual(paths,['/api/album/thumbnail/same']);
+ assert.deepEqual(paths,[]);
+});
+test('a published photo completes even when the phone cannot decode it for a thumbnail',async()=>{
+ const h=harness();await tick();h.context.original=new Blob(['camera original'],{type:'image/jpeg'});h.context.TemuAlbumPhoto.thumbnail=()=>assert.fail('thumbnail must be generated on the server');
+ h.context.fetch=async path=>({ok:true,json:async()=>path.endsWith('/uploads')?{id:'saved',token:'token',url:'https://storage/part',headers:{}}:{id:'saved',thumbnailKey:'key'}});h.run('putFile=async()=>{}');
+ const result=await h.run('sendQueued({id:"stable",blob:original,name:"Guest",filter:"film"},async()=>{},()=>{})');assert.equal(result.id,'saved');
 });
 test('a direct network failure switches the same ticket and original to the bounded same-origin relay',async()=>{
  const h=harness();await tick();const puts=[],patches=[];h.context.original=new Blob(['unchanged original'],{type:'image/jpeg'});
@@ -133,6 +138,12 @@ test('capturing the next photo keeps the same live XHR and publishes both origin
 test('gallery uses only thumbnails and never requests full photo bytes for a missing thumbnail',async()=>{
  const h=harness();await tick();h.nodes['#media-type'].value='all';h.run('items=[{id:"a",name:"Guest <img>",mime:"image/jpeg",filter:"film",thumbnail:true},{id:"b",name:"Other",mime:"image/jpeg",filter:"original",thumbnail:false}];next=null;renderGallery()');
  const html=h.nodes['#grid'].innerHTML;assert.match(html,/\/a\?thumb=1/);assert.doesNotMatch(html,/file\/b/);assert.match(html,/PREVIEW BELUM TERSEDIA/);assert.match(html,/&lt;img&gt;/);
+});
+test('server thumbnail progress displays a loader and automatically refreshes the visible first page',async()=>{
+ const h=harness();await tick();h.nodes['#media-type'].value='all';h.run('items=[{id:"saved",name:"Guest",mime:"image/jpeg",filter:"film",thumbnail:false,thumbnailPending:true}];renderGallery()');
+ assert.match(h.nodes['#grid'].innerHTML,/album-spinner/);assert.match(h.nodes['#grid'].innerHTML,/PRATINJAU DIPROSES/);assert.doesNotMatch(h.nodes['#grid'].innerHTML,/file\/saved/);
+ h.context.refreshes=0;h.run('loadGallery=async()=>{refreshes++};document.hidden=false');h.nodes['#gallery'].hidden=false;const timer=h.context.intervals.find(t=>t.ms===10000);timer.fn();assert.equal(h.context.refreshes,1);
+ h.nodes['#gallery'].hidden=true;timer.fn();assert.equal(h.context.refreshes,1);
 });
 test('gallery recovers from a busy API without clearing existing moments; writes are not implicitly replayed',async()=>{
  const h=harness();await tick();let calls=0;const waits=[];

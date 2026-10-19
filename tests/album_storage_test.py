@@ -19,8 +19,10 @@ class FakeStore:
     def put_file(self,key,path,mime):self.files[key]=(Path(path).read_bytes(),mime)
     def start_multipart(self,key,mime):
         self.next_upload+=1;identifier=str(self.next_upload);self.multipart[identifier]=[key,mime,None];return identifier
-    def request(self,method,key,body=b'',headers=None,query=()):
+    def request(self,method,key,body=b'',headers=None,query=(),output=None,expected=None):
         if self.fail:raise album_storage.StorageError('Temporary storage failure')
+        if method=='GET' and output is not None:
+            data,mime=self.files[key];assert len(data)==expected;Path(output).write_bytes(data);return {},b''
         values=dict(query);session=self.multipart[values['uploadId']]
         assert method=='PUT' and session[0]==key and values['partNumber']=='1' and headers['Content-Type']==session[1]
         session[2]=Path(body).read_bytes();return {},b''

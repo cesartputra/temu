@@ -171,15 +171,7 @@ async function sendQueued(job,save,progress,options={}){
   }
   await save({result});
  }
- if(job.blob.type.startsWith('image/')){
-  await save({phase:'thumbnail'});
-  const thumbnail=await TemuAlbumPhoto.thumbnail(job.blob,job.filter);
-  await TemuAlbumUpload.retry(async()=>{
-   if(signal?.aborted)throw signal.reason;
-   let response;try{response=await fetch('/api/album/thumbnail/'+result.id,{method:'PUT',headers:{'Content-Type':'image/jpeg','X-Temu-Album':'1','X-Album-Thumbnail-Key':result.thumbnailKey},body:thumbnail,signal:signal||AbortSignal.timeout(15000)});}catch(error){error.status=0;throw error;}
-   if(!response.ok){const error=Error('Foto asli tersimpan, thumbnail belum tersedia. Coba lagi untuk menyiapkan preview.');error.status=response.status;throw error;}
-  },{signal,maxWait:60000,onWait:()=>save({phase:'thumbnail'})});
- }
+
  return result;
 }
 async function resumePending(){
@@ -193,10 +185,12 @@ window.addEventListener('resize',layout);
 window.addEventListener('beforeunload',event=>{if(enqueuing||file||queueRows.length){event.preventDefault();event.returnValue='';}});
 function renderGallery(){
  TemuAlbumLoading.stop($('#grid'));const type=$('#media-type').value;
- $('#grid').innerHTML=items.filter(item=>type==='all'||(type==='photo')===item.mime.startsWith('image/')).map(item=>`<button class="moment-card" data-id="${item.id}" aria-label="Buka momen dari ${esc(item.name)}">${item.mime.startsWith('image/')?(item.thumbnail?TemuAlbumLoading.photo('/api/album/file/'+item.id+'?thumb=1','Momen dari '+item.name,'moment-photo filter-'+item.filter):'<div class="moment-video"><span>◎</span><small>PREVIEW BELUM TERSEDIA</small></div>'):'<div class="moment-video" aria-hidden="true"><span>▷</span><small>VIDEO</small></div><span class="media-badge" aria-hidden="true">▷</span>'}</button>`).join('');
+ $('#grid').innerHTML=items.filter(item=>type==='all'||(type==='photo')===item.mime.startsWith('image/')).map(item=>`<button class="moment-card" data-id="${item.id}" aria-label="Buka momen dari ${esc(item.name)}">${item.mime.startsWith('image/')?(item.thumbnail?TemuAlbumLoading.photo('/api/album/file/'+item.id+'?thumb=1','Momen dari '+item.name,'moment-photo filter-'+item.filter):`<div class="moment-video"><span ${item.thumbnailPending?'class="album-spinner"':''}>${item.thumbnailPending?'':'◎'}</span><small>${item.thumbnailPending?'PRATINJAU DIPROSES':'PREVIEW BELUM TERSEDIA'}</small></div>`):'<div class="moment-video" aria-hidden="true"><span>▷</span><small>VIDEO</small></div><span class="media-badge" aria-hidden="true">▷</span>'}</button>`).join('');
  TemuAlbumLoading.watch($('#grid'));$('#gallery-empty').hidden=!info.revealed||!!$('#grid').childElementCount;$('#more').hidden=next===null||!info.revealed;
 }
 async function loadGallery(reset=false){if(loading)return;loading=true;$('#refresh').disabled=true;$('#more').disabled=true;$('#gallery-loading').hidden=false;$('#grid').setAttribute('aria-busy','true');$('#gallery-empty').hidden=true;try{applyInfo(await api('info'));if(!info.revealed){items=[];next=null;renderGallery();return;}const data=await api('items?offset='+(reset?0:(next||0)));items=reset?data.items:[...items,...data.items];next=data.next;renderGallery();}catch(e){notice(e.message,true);}finally{loading=false;$('#refresh').disabled=false;$('#more').disabled=false;$('#gallery-loading').hidden=true;$('#grid').setAttribute('aria-busy','false');}}
+// shortcut: Auto-refresh one gallery page; use the refresh button after loading older pages.
+setInterval(()=>{if(!document.hidden&&!$('#gallery').hidden&&items.length<=24&&items.some(item=>item.thumbnailPending))loadGallery(true);},10000);
 $('#refresh').onclick=()=>loadGallery(true);$('#more').onclick=()=>loadGallery();$('#media-type').onchange=renderGallery;
 $('#grid').onclick=event=>{
  const card=event.target.closest('[data-id]');if(!card)return;const item=items.find(x=>x.id===card.dataset.id);if(!item)return;
