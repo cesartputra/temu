@@ -124,6 +124,30 @@ class AsyncQueueTests(unittest.TestCase):
         with mock.patch.object(album_jobs,'STORAGE_BUDGET',len(fixtures.PHOTO)*3):
             with self.assertRaises(album.AlbumError) as error:self.begin(1)
             self.assertEqual(error.exception.status,429)
+    def test_three_queued_originals_survive_second_storage_reset_without_blocking_third(self):
+        tickets=[self.begin(n) for n in range(3)]
+        for ticket in tickets:self.queue(ticket)
+        inspect=self.store.inspect;failed=False
+        def reset_second(key):
+            nonlocal failed
+            if tickets[1]['id'] in key and not failed:
+                failed=True
+                try:raise ConnectionResetError('temporary reset')
+                except ConnectionResetError as error:raise fixtures.album_storage.StorageError('temporary connection failure') from error
+            return inspect(key)
+        with mock.patch.object(self.store,'inspect',side_effect=reset_second):
+            for _ in range(3):self.assertTrue(album_jobs.process_next(self.a))
+            self.assertEqual(self.a.public(self.config)['count'],2)
+            with self.db.connect() as c:
+                self.assertEqual(c.execute('SELECT state,attempts FROM album_jobs WHERE id=?',(tickets[1]['id'],)).fetchone(),('queued',1))
+                c.execute('UPDATE album_jobs SET ready=0 WHERE id=?',(tickets[1]['id'],))
+            self.assertTrue(album_jobs.process_next(self.a))
+        self.assertEqual(self.a.public(self.config)['count'],3);self.assertFalse(album_jobs.process_next(self.a))
+        with self.db.connect() as c:
+            keys=c.execute('SELECT object_key FROM album_objects').fetchall();self.assertEqual(len(keys),3)
+            self.assertEqual(c.execute("SELECT count(*) FROM album_jobs WHERE state='done'").fetchone()[0],3)
+        for (key,) in keys:self.assertEqual(self.store.files[key][0],fixtures.PHOTO)
+        self.assertTrue(self.a.worker_slots.acquire(False));self.a.worker_slots.release()
     def test_restart_reclaims_expired_worker_lease_without_duplicate_publication(self):
         t=self.begin();self.queue(t)
         with self.db.connect() as c:c.execute("UPDATE album_jobs SET state='running',ready=?,attempts=1 WHERE id=?",(time.time()+60,t['id']))
@@ -233,6 +257,13 @@ class AsyncQueueTests(unittest.TestCase):
         print('180-client simulation:',peak,'; 180 distinct published objects')
 
 class BoundedServerTests(unittest.TestCase):
+    def test_socket_setup_failure_does_not_leak_the_only_http_slot(self):
+        server=BoundedHTTPServer(('127.0.0.1',0),BaseHTTPRequestHandler,max_workers=1)
+        try:
+            request=socket.socket();request.close()
+            with self.assertRaises(OSError):server.process_request(request,('127.0.0.1',1))
+            self.assertTrue(server.slots.acquire(False));server.slots.release()
+        finally:server.server_close()
     def test_excess_http_requests_get_retry_response_without_new_thread(self):
         started=threading.Event();release=threading.Event()
         class Handler(BaseHTTPRequestHandler):

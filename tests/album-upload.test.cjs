@@ -1,5 +1,19 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const transport=require('../dist/album-upload.js');
+test('three completions survive a reset on photo two without duplicating completion or losing its token',async()=>{
+ const calls=[],delays=[];let reset=false;
+ for(const id of ['first','second','third']){
+  const result=await transport.settled({id,token:id+'-token'},async(path,body)=>{
+   calls.push(path);assert.equal(body.token,id+'-token');
+   if(path.endsWith('/complete'))return {pending:true,retryAfter:3};
+   if(id==='second'&&!reset){reset=true;throw Object.assign(Error('Connection reset'),{status:0});}
+   return {id};
+  },{random:()=>.5,wait:async ms=>delays.push(ms)});
+  assert.equal(result.id,id);
+ }
+ assert.equal(calls.filter(path=>path.endsWith('/complete')).length,3);
+ assert.equal(calls.filter(path=>path==='uploads/second/status').length,2);assert.ok(delays.some(ms=>Math.abs(ms-1650)<.01));
+});
 test('180 simultaneous clients retry with different backoff without losing their operation',async()=>{
  const delays=[],results=await Promise.all(Array.from({length:180},(_,id)=>{let attempts=0;return transport.retry(async()=>{if(!attempts++){const e=Error('busy');e.status=429;e.retryAfter=6;throw e;}return id;},{random:()=>id/180,wait:async ms=>delays.push(ms)});}));
  assert.equal(results.length,180);assert.equal(new Set(results).size,180);assert.equal(new Set(delays).size,180);assert.ok(Math.min(...delays)>=6000);assert.ok(Math.max(...delays)<=7200);

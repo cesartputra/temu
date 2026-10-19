@@ -69,6 +69,16 @@ class S3Storage:
         signature=hmac.new(signing_key(self.secret,date,self.region),to_sign.encode(),'sha256').hexdigest()
         return self.endpoint+self.uri(key)+'?'+query+'&X-Amz-Signature='+signature
     def request(self,method,key='',body=b'',headers=None,query=(),limit=65536,output=None,expected=None):
+        deadline=time.monotonic()+120
+        for attempt in range(3):
+            try:return self._request(method,key,body,headers,query,limit,output,expected,deadline)
+            except StorageError as error:
+                # Creating/completing multipart sessions is recovered by its caller, not replayed blindly.
+                if method not in ('GET','HEAD','PUT','DELETE') or not isinstance(error.__cause__,(ConnectionError,TimeoutError,http.client.HTTPException)) or attempt==2:raise
+                delay=.5*2**attempt
+                if time.monotonic()+delay>=deadline:raise
+            time.sleep(delay)
+    def _request(self,method,key,body,headers,query,limit,output,expected,deadline):
         now=datetime.now(timezone.utc);date=now.strftime('%Y%m%d');stamp=now.strftime('%Y%m%dT%H%M%SZ');scope=date+'/'+self.region+'/s3/aws4_request'
         digest=hashlib.sha256();size=0
         if isinstance(body,Path):
@@ -83,8 +93,9 @@ class S3Storage:
         to_sign='AWS4-HMAC-SHA256\n'+stamp+'\n'+scope+'\n'+hashlib.sha256(canonical.encode()).hexdigest()
         signature=hmac.new(signing_key(self.secret,date,self.region),to_sign.encode(),'sha256').hexdigest()
         values['authorization']='AWS4-HMAC-SHA256 Credential='+self.access+'/'+scope+', SignedHeaders='+signed+', Signature='+signature
-        deadline=time.monotonic()+120
-        connection=http.client.HTTPSConnection(self.host,timeout=20,context=ssl.create_default_context())
+        remaining=deadline-time.monotonic()
+        if remaining<=0:raise StorageError('Transfer Object Storage terlalu lama. Silakan coba lagi.')
+        connection=http.client.HTTPSConnection(self.host,timeout=min(20,remaining),context=ssl.create_default_context());response=None
         def transfer_budget():
             seconds=deadline-time.monotonic()
             if seconds<=0:raise StorageError('Transfer Object Storage terlalu lama. Silakan coba lagi.')
@@ -115,12 +126,15 @@ class S3Storage:
                         if remaining_time<=0:raise StorageError('Transfer Object Storage terlalu lama. Silakan coba lagi.')
                         if connection.sock:connection.sock.settimeout(min(20,remaining_time))
                         chunk=response.read(min(65536,remaining))
-                        if not chunk:raise StorageError('Salinan Object Storage belum lengkap.')
+                        if not chunk:raise http.client.IncompleteRead(b'',remaining)
                         f.write(chunk);remaining-=len(chunk)
                     if response.read(1):raise StorageError('Ukuran salinan Object Storage tidak sesuai.')
             return result,data
         except (OSError,http.client.HTTPException) as error: raise StorageError('Koneksi Object Storage belum berhasil. Silakan coba lagi.') from error
-        finally: connection.close()
+        finally:
+            try:
+                if response is not None:response.close()
+            finally:connection.close()
     def inspect(self,key):
         headers,_=self.request('HEAD',key)
         _,head=self.request('GET',key,headers={'Range':'bytes=0-31'},limit=32)

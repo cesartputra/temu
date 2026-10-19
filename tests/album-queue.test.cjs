@@ -4,6 +4,21 @@ const {create}=require('../dist/album-queue.js');
 const tick=()=>new Promise(setImmediate);
 async function until(check){for(let n=0;n<100;n++){if(await check())return;await tick();}assert.fail('queue did not settle');}
 const job=id=>({id,blob:new Blob(['original photo bytes'],{type:'image/jpeg'}),name:'Guest',caption:'Hello',filter:'film'});
+test('three rapid captures retry the second connection reset automatically with only one active upload',async()=>{
+ const transport=require('../dist/album-upload.js'),attempts=[],completed=[],waits=[];let active=0,peak=0,reset=false;
+ const queue=create({indexedDB:new IDBFactory(),onSaved:r=>completed.push(r.id),send:async(item,save,progress,{signal})=>{
+  active++;peak=Math.max(peak,active);
+  try{return await transport.retry(async()=>{
+   attempts.push(item.id);assert.equal(await item.blob.text(),'original photo bytes');await save({phase:'uploading'});progress(0);
+   if(item.id==='second'&&!reset){reset=true;throw Object.assign(Error('Connection reset'),{status:0});}
+   progress(100);return {id:item.id};
+  },{signal,random:()=>0,wait:async ms=>waits.push(ms),onWait:()=>save({phase:'waiting'})});}
+  finally{active--;}
+ }});
+ queue.pause();for(const id of ['first','second','third'])await queue.enqueue(job(id));await queue.resume();
+ await until(()=>completed.length===3);
+ assert.deepEqual(attempts,['first','second','second','third']);assert.deepEqual(completed,['first','second','third']);assert.deepEqual(waits,[1500]);assert.equal(peak,1);assert.deepEqual(await queue.list(),[]);
+});
 test('resuming a legacy failed thumbnail clears the published row and lets the next originals proceed',async()=>{
  const indexedDB=new IDBFactory(),sent=[];
  const old=create({indexedDB,send:async(item,save)=>{await save({result:{id:'already-saved'}});throw Error('Foto belum dapat dibaca.');}});

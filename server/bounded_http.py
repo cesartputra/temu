@@ -15,8 +15,7 @@ class BoundedHTTPServer(ThreadingHTTPServer):
             except OSError:pass
             finally:self.shutdown_request(request)
             return
-        request.settimeout(15)
-        try:super().process_request(request,address)
+        try:request.settimeout(15);super().process_request(request,address)
         except Exception:self.slots.release();raise
     def process_request_thread(self,request,address):
         try:super().process_request_thread(request,address)

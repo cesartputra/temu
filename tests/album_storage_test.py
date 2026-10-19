@@ -1,4 +1,5 @@
-import hashlib,http.client,json,os,tempfile,unittest
+import hashlib,http.client,json,os,socket,tempfile,threading,unittest
+from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 from urllib.parse import urlsplit,parse_qs
@@ -165,6 +166,67 @@ class StorageContractTests(unittest.TestCase):
             with mock.patch.object(album_storage,'S3Storage',return_value=store),mock.patch.object(migrate_album_s3,'S3Storage',return_value=store):
                 self.assertEqual(migrate_album_s3.migrate(directory)['copied'],1);self.assertEqual(migrate_album_s3.migrate(directory)['copied'],0)
             self.assertEqual(path.read_bytes(),PHOTO);self.assertEqual(store.files[store.key('media',item,'.jpg')][0],PHOTO)
+
+class StorageTransportTests(unittest.TestCase):
+    def test_three_originals_retry_second_reset_with_fresh_connections_and_identical_bytes(self):
+        attempts={};saved={};connections=[];delays=[]
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*args):pass
+            def do_PUT(self):
+                data=self.rfile.read(int(self.headers['Content-Length']));attempts[self.path]=attempts.get(self.path,0)+1
+                if self.path.endswith('second.jpg') and attempts[self.path]==1:
+                    self.connection.shutdown(socket.SHUT_RDWR);self.connection.close();return
+                saved[self.path]=data;self.send_response(200);self.send_header('Content-Length','0');self.end_headers()
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=server.serve_forever);thread.start()
+        def connect(host,timeout,context):
+            connection=http.client.HTTPConnection(*server.server_address,timeout=timeout);connections.append(connection);return connection
+        try:
+            with tempfile.TemporaryDirectory() as directory,mock.patch.dict(os.environ,ENV),mock.patch.object(album_storage.http.client,'HTTPSConnection',side_effect=connect),mock.patch.object(album_storage.time,'sleep',side_effect=delays.append):
+                store=album_storage.S3Storage()
+                for name in ('first','second','third'):
+                    path=Path(directory)/(name+'.jpg');path.write_bytes(PHOTO+name.encode());store.put_file('media/'+name+'.jpg',path,'image/jpeg')
+                self.assertEqual(len(saved),3);self.assertEqual(list(attempts.values()),[1,2,1])
+                for name in ('first','second','third'):self.assertEqual(saved['/test-wedding/media/'+name+'.jpg'],PHOTO+name.encode())
+            self.assertEqual(delays,[.5]);self.assertEqual(len(connections),4);self.assertTrue(all(c.sock is None for c in connections))
+        finally:server.shutdown();server.server_close();thread.join()
+    def test_transient_transport_failures_are_bounded_and_every_response_is_closed(self):
+        for failure in (ConnectionResetError,BrokenPipeError,TimeoutError,http.client.IncompleteRead):
+            with self.subTest(failure=failure.__name__),mock.patch.dict(os.environ,ENV):
+                response=mock.Mock(status=200);response.getheaders.return_value=[];response.read.return_value=b'ok'
+                connections=[mock.Mock(),mock.Mock(),mock.Mock()]
+                for connection in connections:connection.sock=None;connection.getresponse.return_value=response
+                error=failure(b'partial') if failure is http.client.IncompleteRead else failure('transient')
+                connections[0].getresponse.side_effect=error;connections[1].getresponse.side_effect=error
+                with mock.patch.object(album_storage.http.client,'HTTPSConnection',side_effect=connections),mock.patch.object(album_storage.time,'sleep') as sleep:
+                    self.assertEqual(album_storage.S3Storage().request('GET','media/test')[1],b'ok')
+                self.assertEqual([call.args[0] for call in sleep.call_args_list],[.5,1.0]);self.assertTrue(all(c.close.call_count==1 for c in connections));response.close.assert_called_once()
+        with mock.patch.dict(os.environ,ENV),mock.patch.object(album_storage.http.client,'HTTPSConnection') as factory,mock.patch.object(album_storage.time,'sleep') as sleep:
+            factory.return_value.getresponse.side_effect=ConnectionResetError('persistent')
+            with self.assertRaises(album_storage.StorageError):album_storage.S3Storage().request('PUT','media/test',b'original')
+            self.assertEqual(factory.call_count,3);self.assertEqual(factory.return_value.close.call_count,3);self.assertEqual(sleep.call_count,2)
+    def test_permission_errors_and_ambiguous_multipart_creation_are_not_blindly_retried(self):
+        with mock.patch.dict(os.environ,ENV),mock.patch.object(album_storage.http.client,'HTTPSConnection') as factory,mock.patch.object(album_storage.time,'sleep') as sleep:
+            connection=factory.return_value;connection.sock=None;response=connection.getresponse.return_value;response.status=403;response.getheaders.return_value=[];response.read.return_value=b'<Error><Code>AccessDenied</Code></Error>'
+            with self.assertRaisesRegex(album_storage.StorageError,'AccessDenied'):album_storage.S3Storage().request('PUT','media/test',b'original')
+            self.assertEqual(factory.call_count,1);response.close.assert_called_once();sleep.assert_not_called()
+        with mock.patch.dict(os.environ,ENV),mock.patch.object(album_storage.http.client,'HTTPSConnection') as factory,mock.patch.object(album_storage.time,'sleep') as sleep:
+            factory.return_value.getresponse.side_effect=ConnectionResetError('response lost')
+            with self.assertRaises(album_storage.StorageError):album_storage.S3Storage().start_multipart('media/test','image/jpeg')
+            self.assertEqual(factory.call_count,1);factory.return_value.close.assert_called_once();sleep.assert_not_called()
+    def test_interrupted_download_is_restarted_without_appending_partial_bytes(self):
+        responses=[mock.Mock(status=200),mock.Mock(status=200)];connections=[mock.Mock(),mock.Mock()]
+        for connection,response in zip(connections,responses):
+            connection.sock=None;connection.getresponse.return_value=response;response.getheaders.return_value=[('Content-Length',str(len(PHOTO)))];response.read.side_effect=[PHOTO,b'']
+        responses[0].read.side_effect=[PHOTO[:10],b'']
+        with tempfile.TemporaryDirectory() as directory,mock.patch.dict(os.environ,ENV),mock.patch.object(album_storage.http.client,'HTTPSConnection',side_effect=connections),mock.patch.object(album_storage.time,'sleep') as sleep:
+            target=Path(directory)/'original.jpg';album_storage.S3Storage().request('GET','media/test',output=target,expected=len(PHOTO))
+            self.assertEqual(target.read_bytes(),PHOTO);sleep.assert_called_once_with(.5)
+        self.assertTrue(all(r.close.call_count==1 for r in responses));self.assertTrue(all(c.close.call_count==1 for c in connections))
+    def test_retries_do_not_extend_the_overall_storage_budget(self):
+        with mock.patch.dict(os.environ,ENV),mock.patch.object(album_storage.http.client,'HTTPSConnection') as factory,mock.patch.object(album_storage.time,'sleep') as sleep,mock.patch.object(album_storage.time,'monotonic',side_effect=[0,0,119.75]):
+            factory.return_value.getresponse.side_effect=ConnectionResetError('response lost')
+            with self.assertRaises(album_storage.StorageError):album_storage.S3Storage().request('HEAD','media/test')
+            self.assertEqual(factory.call_count,1);sleep.assert_not_called()
 
 class CopyFallbackTests(unittest.TestCase):
     def test_provider_copy_fallback_checks_exact_bytes_and_removes_temporary_file(self):

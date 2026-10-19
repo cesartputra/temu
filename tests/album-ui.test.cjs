@@ -155,6 +155,19 @@ test('gallery recovers from a busy API without clearing existing moments; writes
  h.context.fetch=async()=>({ok:false,status:403,json:async()=>({error:'expired'})});
  await assert.rejects(h.run('api("items")'),/expired/);
 });
+test('timeout after response headers remains retryable and user cancellation is preserved',async()=>{
+ const h=harness();await tick();let attempts=0;const waits=[];let timer;
+ h.context.AbortSignal={timeout(){timer=new AbortController();return timer.signal;}};
+ h.context.TemuAlbumUpload={...h.context.TemuAlbumUpload,retry:(task,options)=>require('../dist/album-upload.js').retry(task,{...options,random:()=>0,wait:async ms=>waits.push(ms)})};
+ h.context.fetch=async()=>({ok:true,json:async()=>{
+  if(++attempts===1){const error=new DOMException('Body timed out','TimeoutError');timer.abort(error);throw error;}
+  return {items:[]};
+ }});
+ assert.equal((await h.run('api("items?offset=0")')).items.length,0);assert.equal(attempts,2);assert.deepEqual(waits,[1500]);
+ const controller=new AbortController();h.context.userSignal=controller.signal;
+ h.context.fetch=async()=>({ok:true,json:async()=>{controller.abort(new DOMException('User cancelled','AbortError'));throw controller.signal.reason;}});
+ await assert.rejects(h.run('api("uploads",{name:"Guest"},{signal:userSignal})'),{name:'AbortError',message:'User cancelled'});
+});
 test('detail downloads original file and opens a Story composer with the full original, not the thumbnail',async()=>{
  const h=harness();await tick();h.run('items=[{id:"a",name:"<Guest>",caption:"Line1\\nLine2 <script>",created:"2026-11-21T12:00:00Z",mime:"image/jpeg",filter:"film"}]');
  h.nodes['#grid'].onclick({target:{closest:()=>({dataset:{id:'a'}})}});const html=h.nodes['#moment-detail'].innerHTML;assert.match(html,/file\/a\?download=1/);assert.match(html,/id="open-story"/);assert.match(html,/&lt;script&gt;/);

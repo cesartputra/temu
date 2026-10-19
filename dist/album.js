@@ -42,6 +42,10 @@ async function api(path,body,options={}){
  let r;try{r=await fetch('/api/album/'+path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-Temu-Album':'1'},body:body?JSON.stringify(body):undefined,cache:'no-store',signal:controller.signal});}catch(error){error.status=0;throw error;}
  let data;try{data=await r.json();}catch{if(controller.signal.aborted)throw controller.signal.reason;throw Object.assign(Error('Respons server belum lengkap. Silakan coba lagi.'),{status:r.ok?502:r.status});}
  if(!r.ok){const error=Error(data.error||'Album belum dapat diakses.');error.status=r.status;error.retryAfter=data.retryAfter||Number(r.headers?.get('Retry-After'));throw error;}return data;
+ }catch(error){
+  if(options.signal?.aborted)throw options.signal.reason;
+  if(timeout.aborted)throw Object.assign(Error('Respons server terlalu lama. Menghubungkan ulang unggahan…'),{status:0});
+  throw error;
  }finally{timeout.removeEventListener('abort',cancel);options.signal?.removeEventListener('abort',cancel);}
  };
  return body?request():TemuAlbumUpload.retry(request,{maxWait:30000,signal:options.signal});
