@@ -19,6 +19,11 @@ class FakeStore:
     def put_file(self,key,path,mime):self.files[key]=(Path(path).read_bytes(),mime)
     def start_multipart(self,key,mime):
         self.next_upload+=1;identifier=str(self.next_upload);self.multipart[identifier]=[key,mime,None];return identifier
+    def request(self,method,key,body=b'',headers=None,query=()):
+        if self.fail:raise album_storage.StorageError('Temporary storage failure')
+        values=dict(query);session=self.multipart[values['uploadId']]
+        assert method=='PUT' and session[0]==key and values['partNumber']=='1' and headers['Content-Type']==session[1]
+        session[2]=Path(body).read_bytes();return {},b''
     def finish_multipart(self,key,identifier,size):
         if identifier not in self.multipart:return
         target,mime,data=self.multipart[identifier]
@@ -69,6 +74,33 @@ class UploadCases:
         self.assertEqual(self.store.files[key][0],PHOTO)
         self.assertEqual(self.ticket({**body,'mime':'video/mp4'})[0],415)
         self.assertEqual(self.ticket({**body,'filter':'lr-unknown'})[0],415)
+    def test_relay_preserves_original_and_ticket_and_cannot_overwrite_published_media(self):
+        self.join(self.config());status,_,raw=self.ticket({'requestId':'d'*32,'name':'Guest','caption':'','mime':'image/jpeg','size':len(PHOTO),'filter':'film','multipart':True});self.assertEqual(status,200);ticket=json.loads(raw)
+        path='/api/album/uploads/'+ticket['id']+'/part';headers={'X-Album-Upload-Token':ticket['token']}
+        self.assertEqual(self.request(path,'PUT',PHOTO,mime='image/jpeg',headers=headers)[0],200)
+        self.assertEqual(self.finish_ticket(ticket)[0],201)
+        key=self.store.key('media',ticket['id'],'.jpg');self.assertEqual(self.store.files[key][0],PHOTO)
+        self.assertEqual(self.request(path,'PUT',PHOTO,mime='image/jpeg',headers=headers)[0],409)
+        self.assertEqual(json.loads(self.request('/api/album/info')[2])['count'],1)
+        self.assertEqual(list((self.db_for_media.directory/'album-media').glob('.relay-*')),[])
+    def test_relay_validates_token_size_type_and_magic_and_releases_capacity_after_storage_error(self):
+        self.join(self.config());_,_,raw=self.ticket({'name':'Guest','mime':'image/jpeg','size':len(PHOTO),'multipart':True});ticket=json.loads(raw)
+        path='/api/album/uploads/'+ticket['id']+'/part';headers={'X-Album-Upload-Token':ticket['token']}
+        self.assertEqual(self.request(path,'PUT',PHOTO,mime='image/jpeg',headers={'X-Album-Upload-Token':'wrong'})[0],403)
+        self.assertEqual(self.request(path,'PUT',PHOTO+b'changed',mime='image/jpeg',headers=headers)[0],400)
+        self.assertEqual(self.request(path,'PUT',PHOTO,mime='image/png',headers=headers)[0],400)
+        self.assertEqual(self.request(path,'PUT',b'x'*len(PHOTO),mime='image/jpeg',headers=headers)[0],415)
+        target=self.http.RequestHandlerClass.album if self.fixture is album_test.AlbumTests else self.albumhttp.RequestHandlerClass.album
+        self.assertTrue(all(target.relay_slots.acquire(False) for _ in range(2)))
+        try:self.assertEqual(self.request(path,'PUT',PHOTO,mime='image/jpeg',headers=headers)[0],429)
+        finally:
+            for _ in range(2):target.relay_slots.release()
+        self.store.fail=True;self.assertEqual(self.request(path,'PUT',PHOTO,mime='image/jpeg',headers=headers)[0],503)
+        self.assertEqual(list((self.db_for_media.directory/'album-media').glob('.relay-*')),[])
+        self.store.fail=False;self.assertEqual(self.request(path,'PUT',PHOTO,mime='image/jpeg',headers=headers)[0],200)
+        self.assertEqual(json.loads(self.request('/api/album/info')[2])['count'],0)
+        self.request('/api/album/uploads/'+ticket['id']+'/cancel','POST',{'token':ticket['token']})
+        self.assertEqual(self.request(path,'PUT',PHOTO,mime='image/jpeg',headers=headers)[0],410)
     def test_wrong_size_magic_token_or_unfinished_object_never_enters_gallery(self):
         t=self.start();self.assertEqual(self.finish_ticket(t)[0],200)
         self.assertEqual(self.request('/api/album/uploads/'+t['id']+'/complete','POST',{'token':'wrong'})[0],403)

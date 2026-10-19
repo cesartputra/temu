@@ -77,7 +77,7 @@ class Album:
                 raise
         self.db.backup(force=True);return {'ok':True,'imported':len(rows)}
     def __init__(self,db):
-        self.db=db;self.upload_lock=threading.Lock();self.thumbnail_slots=threading.BoundedSemaphore(2);self.directory=db.directory/'album-media';self.directory.mkdir(mode=0o700,exist_ok=True)
+        self.db=db;self.upload_lock=threading.Lock();self.thumbnail_slots=threading.BoundedSemaphore(2);self.relay_slots=threading.BoundedSemaphore(2);self.directory=db.directory/'album-media';self.directory.mkdir(mode=0o700,exist_ok=True)
         with db.connect() as c:
             c.executescript('''CREATE TABLE IF NOT EXISTS album_settings(id INTEGER PRIMARY KEY CHECK(id=1),config TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS album_items(id TEXT PRIMARY KEY,name TEXT NOT NULL,caption TEXT NOT NULL,filter TEXT NOT NULL,mime TEXT NOT NULL,size INTEGER NOT NULL,created TEXT NOT NULL,hidden INTEGER NOT NULL DEFAULT 0);
@@ -226,6 +226,31 @@ class Album:
             c.execute("UPDATE album_jobs SET state='failed',error='Unggahan sudah dibatalkan.' WHERE id=?",(item,))
         # No synchronous S3 I/O; the expiry cleanup safely reaps staging.
         return {'ok':True}
+    def relay_part(self,h,item,config):
+        if not album_storage.enabled():raise AlbumError('Jalur cadangan tidak tersedia.',409)
+        if not config['uploadsOpen']:raise AlbumError('Unggahan album sudah ditutup.',403)
+        row=self.upload_record(item,{'token':h.headers.get('X-Album-Upload-Token','')})
+        if row[7]!=0:raise AlbumError('Momen sudah tersimpan.',409)
+        if h.headers.get('Content-Length')!=str(row[5]) or h.headers.get('Content-Type')!=row[4]:raise AlbumError('Ukuran atau format unggahan berubah.',400)
+        with self.db.connect() as c:session=c.execute('SELECT upload_id FROM album_multipart WHERE id=?',(item,)).fetchone()
+        if not session or not session[0]:raise AlbumError('Tiket unggahan belum siap.',409)
+        if not self.relay_slots.acquire(blocking=False):raise AlbumError('Jalur cadangan sedang sibuk. File tetap tersimpan di HP.',429)
+        try:
+            with album_storage.temporary_space(row[5],self.directory),tempfile.TemporaryDirectory(dir=self.directory,prefix='.relay-') as directory:
+                path=Path(directory)/'part';remaining=row[5];deadline=time.monotonic()+90
+                with path.open('wb') as f:
+                    while remaining:
+                        budget=deadline-time.monotonic()
+                        if budget<=0:raise AlbumError('Koneksi unggahan terlalu lama. Silakan coba lagi.',503)
+                        h.connection.settimeout(min(30,budget));chunk=h.rfile.read(min(65536,remaining))
+                        if not chunk:raise AlbumError('Unggahan terputus. File tetap tersimpan di HP.',400)
+                        if remaining==row[5] and not valid_media(row[4],chunk[:32]):raise AlbumError('Isi file tidak sesuai format foto atau video.',415)
+                        f.write(chunk);remaining-=len(chunk)
+                # Reuse the server-owned multipart session; never accept a destination URL.
+                self.upload_record(item,{'token':h.headers.get('X-Album-Upload-Token','')})
+                store=self.storage();store.request('PUT',store.key('media',item,EXTENSIONS[row[4]]),body=path,headers={'Content-Type':row[4]},query=[('partNumber','1'),('uploadId',session[0])])
+            return {'ok':True}
+        finally:self.relay_slots.release()
     def upload(self,handler,config):
         if album_storage.enabled():raise AlbumError('Gunakan tiket unggahan langsung ke Object Storage.',409)
         if not config['uploadsOpen']:raise AlbumError('Unggahan album sudah ditutup.',403)
@@ -431,6 +456,7 @@ class Album:
                     result=self.complete_upload(h,path.split('/')[-2],config);h.reply(202 if result.get('pending') else 201,result)
                 elif re.fullmatch(r'/api/album/uploads/[a-f0-9]{32}/status',path) and h.command=='POST':h.reply(200,self.upload_status(h,path.split('/')[-2]))
                 elif re.fullmatch(r'/api/album/uploads/[a-f0-9]{32}/cancel',path) and h.command=='POST':h.reply(200,self.cancel_upload(h,path.split('/')[-2]))
+                elif re.fullmatch(r'/api/album/uploads/[a-f0-9]{32}/part',path) and h.command=='PUT':h.reply(200,self.relay_part(h,path.split('/')[-2],config))
                 elif path=='/api/album/items' and h.command in ('GET','HEAD'):
                     offset=int(parse_qs(urlsplit(h.path).query).get('offset',['0'])[0])
                     if not 0<=offset<=100000:raise AlbumError('Halaman tidak valid.')

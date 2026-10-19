@@ -57,6 +57,15 @@ class SplitAlbumTests(unittest.TestCase):
    self.assertEqual(self.request('/api/album/admin',admin=True)[0],403);self.assertEqual(self.request('/health')[0],200)
   finally:self.origin=source
   self.assertRaises(ValueError,internal_target,'http://public.example.com:8080')
+ def test_fallback_transfer_capacity_keeps_api_slots_available(self):
+  self.join(self.config());proxy=self.http.RequestHandlerClass.album
+  self.assertTrue(all(proxy.relay_slots.acquire(False) for _ in range(2)))
+  try:
+   status,headers,_=self.request('/api/album/uploads/'+'a'*32+'/part','PUT',b'x'*12,mime='image/jpeg')
+   self.assertEqual(status,429);self.assertEqual(headers['Retry-After'],'3')
+   self.assertEqual(self.request('/api/album/info')[0],200);self.assertEqual(self.request('/api/events',admin=True)[0],200)
+  finally:
+   for _ in range(2):proxy.relay_slots.release()
  def migration(self,config,items,files):
   content=io.BytesIO()
   with tarfile.open(fileobj=content,mode='w:') as out:

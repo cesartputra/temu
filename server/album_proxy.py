@@ -12,7 +12,7 @@ class AlbumProxy:
     def __init__(self,url,key,token):
         self.host,self.port=internal_target(url)
         if len(key)<32:raise ValueError('TEMU_ALBUM_PROXY_KEY minimal 32 karakter.')
-        self.key=key;self.token=token;self.slots=threading.BoundedSemaphore(4)
+        self.key=key;self.token=token;self.slots=threading.BoundedSemaphore(4);self.relay_slots=threading.BoundedSemaphore(2)
     def config(self):
         connection=http.client.HTTPConnection(self.host,self.port,timeout=3)
         try:
@@ -34,10 +34,13 @@ class AlbumProxy:
             h.close_connection=True;h.reply(413,{'error':'Ukuran unggahan tidak valid.'});return True
         if not self.slots.acquire(blocking=False):
             h.close_connection=True;h.reply(503,{'error':'Album sedang sibuk. Coba lagi sebentar; buku tamu tetap dapat digunakan.','retryAfter':2});return True
+        relay=h.command=='PUT' and urlsplit(h.path).path.startswith('/api/album/uploads/') and urlsplit(h.path).path.endswith('/part')
+        if relay and not self.relay_slots.acquire(blocking=False):
+            self.slots.release();h.close_connection=True;h.reply(429,{'error':'Jalur cadangan sedang sibuk. File tetap tersimpan di HP.','retryAfter':3});return True
         connection=http.client.HTTPConnection(self.host,self.port,timeout=90 if h.command in ('PUT','POST') else 8);started=False
         try:
             connection.connect();connection.putrequest(h.command,h.path,skip_host=True,skip_accept_encoding=True)
-            allowed={'host','origin','cookie','authorization','content-type','content-length','range','sec-fetch-site','x-temu-album','x-album-name','x-album-caption','x-album-filter','x-album-thumbnail-key'}
+            allowed={'host','origin','cookie','authorization','content-type','content-length','range','sec-fetch-site','x-temu-album','x-album-name','x-album-caption','x-album-filter','x-album-thumbnail-key','x-album-upload-token','x-album-request-id'}
             for name,value in h.headers.items():
                 if name.lower() in allowed:connection.putheader(name,value)
             connection.putheader('X-Temu-Album-Proxy',self.key);connection.endheaders()
@@ -59,5 +62,7 @@ class AlbumProxy:
         except (OSError,TimeoutError,http.client.HTTPException):
             h.close_connection=True
             if not started:h.reply(503,{'error':'Album sementara tidak tersedia. Buku tamu dan undangan tetap dapat digunakan.','retryAfter':3})
-        finally:connection.close();self.slots.release()
+        finally:
+            connection.close();self.slots.release()
+            if relay:self.relay_slots.release()
         return True

@@ -118,7 +118,7 @@ function renderQueue(rows,error){
  queueRows=rows;$('#upload-queue').hidden=!rows.length&&!error;
  $('#queue-summary').textContent=error?error.message:rows.length+' momen dalam antrean'+(rows.some(x=>x.state==='failed')?' · perlu diperiksa':'');
  const phases={recovering:'Memeriksa unggahan sebelumnya…',ticket:'Meminta giliran unggah…',waiting:'Menunggu server · file tetap tersimpan di HP',processing:'Memproses album…',thumbnail:'Foto tersimpan · menyiapkan thumbnail'};
- $('#queue-items').innerHTML=rows.map(job=>`<div class="queue-item"><span>${esc(job.name)} · ${job.state==='failed'?esc(job.error):job.result?phases.thumbnail:job.state!=='uploading'?'Menunggu unggahan':job.phase==='uploading'?'Mengunggah '+Math.round(job.progress||0)+'%':phases[job.phase]||'Memeriksa unggahan sebelumnya…'}</span><button type="button" class="text-button" data-retry="${job.id}">Coba lagi</button>${job.state==='failed'?`<button type="button" class="text-button" data-remove="${job.id}">Hapus antrean</button>`:''}</div>`).join('');
+ $('#queue-items').innerHTML=rows.map(job=>`<div class="queue-item"><span>${esc(job.name)} · ${job.state==='failed'?esc(job.error):job.result?phases.thumbnail:job.state!=='uploading'?'Menunggu unggahan':job.phase==='uploading'?(job.transport==='relay'?'Mengunggah lewat koneksi cadangan ':'Mengunggah ')+Math.round(job.progress||0)+'%':phases[job.phase]||'Memeriksa unggahan sebelumnya…'}</span><button type="button" class="text-button" data-retry="${job.id}">Coba lagi</button>${job.state==='failed'?`<button type="button" class="text-button" data-remove="${job.id}">Hapus antrean</button>`:''}</div>`).join('');
 }
 $('#queue-items').onclick=async event=>{const retry=event.target.closest('[data-retry]'),remove=event.target.closest('[data-remove]');try{if(retry)await outbox.retry(retry.dataset.retry);if(remove&&confirm('Hapus momen ini dari antrean HP? Foto yang sudah tersimpan di album tetap ada.'))await outbox.discard(remove.dataset.remove);}catch(e){notice(e.message,true);}};
 $('#upload-form').onsubmit=async event=>{
@@ -132,13 +132,15 @@ $('#upload-form').onsubmit=async event=>{
  }catch(e){notice(e.message,true);}finally{enqueuing=false;captureState();}
 };
 function putFile(url,headers,blob,progress,options={}){return new Promise((resolve,reject)=>{
- const signal=options.signal;if(signal?.aborted)return reject(signal.reason);let finished=false;
- const xhr=new XMLHttpRequest();xhr.open('PUT',url);xhr.timeout=180000;for(const [key,value] of Object.entries(headers))xhr.setRequestHeader(key,value);
- const done=(error,value)=>{if(finished)return;finished=true;signal?.removeEventListener('abort',stop);if(error)reject(error);else resolve(value);};
+ const signal=options.signal;if(signal?.aborted)return reject(signal.reason);let finished=false,timer,loaded=0;
+ const xhr=new XMLHttpRequest();
+ const done=(error,value)=>{if(finished)return;finished=true;clearTimeout(timer);signal?.removeEventListener('abort',stop);if(error)reject(error);else resolve(value);};
+ const watch=()=>{clearTimeout(timer);if(options.direct)timer=setTimeout(()=>{if(document.hidden){watch();return;}done(Object.assign(Error('Koneksi langsung ke storage tidak bergerak.'),{status:0}));xhr.abort();},loaded?30000:15000);};
  const stop=()=>{xhr.abort();done(signal.reason);};signal?.addEventListener('abort',stop,{once:true});
- xhr.upload.onprogress=event=>{if(!finished&&event.lengthComputable)progress(event.loaded/event.total*100);};
+ xhr.upload.onprogress=event=>{if(!finished&&event.lengthComputable){if(event.loaded>loaded){loaded=event.loaded;watch();}progress(event.loaded/event.total*100);}};
  xhr.onload=()=>{if(xhr.status>=200&&xhr.status<300){let result=null;try{result=xhr.responseText?JSON.parse(xhr.responseText):null;}catch{}done(null,result);}else{const error=Error('Unggahan belum berhasil. File tetap ada di antrean.');error.status=xhr.status;done(error);}};
- xhr.onerror=xhr.ontimeout=xhr.onabort=()=>{const error=signal?.aborted?signal.reason:Object.assign(Error('Koneksi terputus. File tetap tersimpan; coba lagi dari antrean.'),{status:0});done(error);};xhr.send(blob);
+ xhr.onerror=xhr.ontimeout=xhr.onabort=()=>{const error=signal?.aborted?signal.reason:Object.assign(Error('Koneksi terputus. File tetap tersimpan; coba lagi dari antrean.'),{status:0});done(error);};
+ xhr.open('PUT',url);xhr.timeout=180000;for(const [key,value] of Object.entries(headers))xhr.setRequestHeader(key,value);watch();xhr.send(blob);
 });}
 async function sendQueued(job,save,progress,options={}){
  const {signal}=options,request=(path,body)=>api(path,body,{signal});
@@ -152,7 +154,11 @@ async function sendQueued(job,save,progress,options={}){
      const uploaded=ticket.pending||(job.stage==='uploaded'&&job.ticket?.id===ticket.id);
      await save({ticket,stage:uploaded?'uploaded':null});
      if(!uploaded){
-      try{await TemuAlbumUpload.retry(async()=>{await save({phase:'uploading'});return putFile(ticket.url,ticket.headers,job.blob,progress,{signal});},{signal,maxWait:5*60*1000,onWait:()=>save({phase:'waiting'})});}
+      try{await TemuAlbumUpload.retry(async()=>{
+       await save({phase:'uploading'});
+       if(job.transport!=='relay')try{return await putFile(ticket.url,ticket.headers,job.blob,progress,{signal,direct:true});}catch(error){if(signal?.aborted||error.status!==0)throw error;job.transport='relay';await save({transport:'relay',phase:'uploading'});}
+       return putFile('/api/album/uploads/'+ticket.id+'/part',{'Content-Type':job.blob.type,'X-Temu-Album':'1','X-Album-Upload-Token':ticket.token},job.blob,progress,{signal});
+      },{signal,maxWait:2*60*1000,onWait:()=>save({phase:'waiting'})});}
       catch(error){if(attempt===0&&[403,404].includes(error.status))continue;throw error;}
       await save({stage:'uploaded'});
      }

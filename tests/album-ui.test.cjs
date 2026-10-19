@@ -6,6 +6,7 @@ function harness({lightroom=[]}={}){
  const document={body:make(),hidden:false,addEventListener:(name,fn)=>events[name]=fn,querySelector:s=>nodes[s]??=make(),querySelectorAll:s=>s==='[data-filter]'?['original','film','warm','mono','dazz'].map(filter=>Object.assign(nodes[filter]??=make(),{dataset:{filter}})):s==='[data-story-overlay]'?['celebration','monogram','none'].map(storyOverlay=>Object.assign(nodes[storyOverlay]??=make(),{dataset:{storyOverlay}})):[]};
  const config={title:'Reva & Cesar',count:0,uploadsOpen:true,revealed:true,filter:'film',storage:'s3'};
  const context={TemuAlbumLoading:require('../dist/album-loading.js'),document,window:{matchMedia:()=>({matches:false}),addEventListener:(name,fn)=>events[name]=fn},navigator:{canShare:()=>true,share:async value=>shared.push(value)},setTimeout(fn,ms){timers.push({fn,ms});},location:{hash:'',pathname:'/album'},history:{replaceState(){}},fetch:async()=>({ok:true,json:async()=>config,blob:async()=>new Blob(['original bytes'])}),URL:{createObjectURL:()=> 'blob:moment',revokeObjectURL:u=>revoked.push(u)},URLSearchParams,TemuAlbumPresets:{load:async()=>lightroom,has:id=>lightroom.some(p=>p.id===id),get:id=>lightroom.find(p=>p.id===id)},TemuAlbumPhoto:{preview:async()=>new Blob(['filtered preview'],{type:'image/png'}),story:async()=>new Blob(['story'],{type:'image/png'}),thumbnail:async()=>new Blob(['thumbnail'],{type:'image/jpeg'})},TemuAlbumUpload:require('../dist/album-upload.js'),TemuAlbumQueue:{create(options){queueOptions=options;return {pause(){},resume:async()=>{},enqueue:async job=>queued.push(job),retry:async()=>{},discard:async()=>{}};}},crypto:require('node:crypto').webcrypto,AbortController,sessionStorage:{getItem(){return null;},removeItem(){}},setInterval(){},Date,AbortSignal,Blob,confirm:()=>true};
+ context.clearTimeout=()=>{};
  vm.runInNewContext(source,context);return {nodes,revoked,queued,timers,shared,events,saves,context,config,get queueOptions(){return queueOptions;},run:s=>vm.runInNewContext(s,context)};
 }
 test('photo and video buttons invoke native capture inputs; canceling retake preserves the previous photo',async()=>{
@@ -47,6 +48,28 @@ test('recovered server jobs are polled without PUT, and published originals only
  assert.equal(result.id,'same');assert.ok(paths.includes('/api/album/uploads/same/status'));assert.ok(!paths.includes('/api/album/uploads/same/complete'));assert.ok(paths.includes('/api/album/thumbnail/same'));
  paths.length=0;await h.run('sendQueued({id:"stable",blob:original,name:"Guest",filter:"film",result:{id:"same",thumbnailKey:"thumb"}},async()=>{},()=>{})');
  assert.deepEqual(paths,['/api/album/thumbnail/same']);
+});
+test('a direct network failure switches the same ticket and original to the bounded same-origin relay',async()=>{
+ const h=harness();await tick();const puts=[],patches=[];h.context.original=new Blob(['unchanged original'],{type:'image/jpeg'});
+ h.context.fetch=async path=>({ok:true,json:async()=>path.endsWith('/uploads')?{id:'same',token:'private-ticket',url:'https://storage/part',headers:{'Content-Type':'image/jpeg'}}:{id:'same',thumbnailKey:'thumb'}});
+ h.context.upload=async(...args)=>{puts.push(args);if(args[0].startsWith('https:'))throw Object.assign(Error('No progress'),{status:0});};h.context.save=async patch=>patches.push(patch);h.run('putFile=upload');
+ const result=await h.run('sendQueued({id:"stable",blob:original,name:"Guest",filter:"film"},save,()=>{})');
+ assert.equal(result.id,'same');assert.equal(puts.length,2);assert.equal(puts[1][0],'/api/album/uploads/same/part');assert.equal(puts[1][1]['X-Album-Upload-Token'],'private-ticket');assert.equal(puts[1][2],h.context.original);assert.ok(patches.some(p=>p.transport==='relay'));
+ puts.length=0;await h.run('sendQueued({id:"stable",blob:original,name:"Guest",filter:"film",transport:"relay"},save,()=>{})');assert.equal(puts.length,1);assert.equal(puts[0][0],'/api/album/uploads/same/part');
+});
+test('direct transfers release a silent connection after 15 seconds and watch advancing bytes rather than repeated zero progress',async()=>{
+ const h=harness();await tick();let xhr;h.context.XMLHttpRequest=class{
+  constructor(){xhr=this;this.upload={};}open(){assert.equal(typeof this.upload.onprogress,'function');}setRequestHeader(){}send(){}abort(){this.aborted=true;this.onabort?.();}
+ };
+ const first=h.run('putFile("https://storage/part",{},new Blob(["original"]),()=>{},{direct:true})');const rejected=assert.rejects(first,error=>error.status===0);let timer=h.timers.at(-1);assert.equal(timer.ms,15000);
+ xhr.upload.onprogress({lengthComputable:true,loaded:0,total:100});assert.equal(h.timers.at(-1),timer);timer.fn();await rejected;assert.equal(xhr.aborted,true);
+ const next=h.run('putFile("https://storage/part",{},new Blob(["original"]),()=>{},{direct:true})');xhr.upload.onprogress({lengthComputable:true,loaded:10,total:100});timer=h.timers.at(-1);assert.equal(timer.ms,30000);xhr.upload.onprogress({lengthComputable:true,loaded:10,total:100});assert.equal(h.timers.at(-1),timer);xhr.status=200;xhr.responseText='';xhr.onload();await next;
+});
+test('canceling a direct transfer never starts a relay',async()=>{
+ const h=harness();await tick();let puts=0;const controller=new AbortController();h.context.signal=controller.signal;h.context.original=new Blob(['original'],{type:'image/jpeg'});
+ h.context.fetch=async()=>({ok:true,json:async()=>({id:'same',token:'token',url:'https://storage/part',headers:{}})});
+ h.context.stop=()=>{puts++;controller.abort();throw Object.assign(Error('aborted'),{status:0});};h.run('putFile=async()=>stop()');
+ await assert.rejects(h.run('sendQueued({id:"stable",blob:original,name:"Guest",filter:"film"},async()=>{},()=>{},{signal})'));assert.equal(puts,1);
 });
 test('an expired uploaded ticket reuploads the retained original only when the server returns a different ticket',async()=>{
  const h=harness();await tick();const puts=[],patches=[];h.context.original=new Blob(['original'],{type:'image/jpeg'});
