@@ -168,7 +168,6 @@ function setupCalendar(event,wedding,info){
  $('#calendar-native').textContent=ios?'Buka Apple Calendar':android?'Buka kalender Android':'Apple Calendar';
  $('#calendar-google').href=links.google;
  $('#calendar-description').textContent=info.guest.akad==='y'?'Simpan jadwal akad dan resepsi.':'Simpan jadwal resepsi.';
- $('.calendar-hint').textContent=info.guest.akad==='y'?'Simpan jadwal akad dan resepsi agar tidak terlewat.':'Simpan jadwal resepsi agar tidak terlewat.';
  $('#save-calendar').onclick=e=>{e.preventDefault();$('#calendar-choice').showModal();};
  $('#calendar-close').onclick=()=>$('#calendar-choice').close();
 }

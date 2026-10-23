@@ -1,4 +1,5 @@
 const test=require('node:test'),assert=require('node:assert/strict');
+const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const {create}=require('../dist/invitation2-calendar.js');
 test('calendar contains separate ceremony and reception at the correct WIB times',()=>{
  const content=create({date:'2026-11-21',now:new Date('2026-10-02T00:00:00Z')});
@@ -18,4 +19,22 @@ test('Native calendar links retain WIB times and hide ceremony for reception-onl
  const {links}=require('../dist/invitation2-calendar.js');const base={date:'2026-11-21',wedding:{ceremonyTime:'15.30 WIB - 17.00 WIB',receptionTime:'18.30 WIB - 20.30 WIB'},calendarPath:'/api/invite/calendar.ics?g=test&c=calendar-signature',origin:'https://example.com'};
  const reception=links(base),both=links({...base,akad:true});assert.ok(reception.apple.startsWith('webcal://example.com/api/invite/calendar.ics?'));assert.ok(reception.android.includes('android.intent.action.INSERT'));
  assert.equal(new URL(reception.google).searchParams.get('dates'),'20261121T113000Z/20261121T133000Z');assert.ok(!new URL(reception.google).searchParams.get('details').includes('Akad'));assert.equal(new URL(both.google).searchParams.get('dates'),'20261121T083000Z/20261121T133000Z');
+});
+
+for(const akad of ['n','y'])for(const platform of ['iPhone','Android','Desktop'])test(`calendar actions work without the removed hint for Akad ${akad}, ${platform}`,()=>{
+ const nodes=Object.fromEntries(['#calendar-native','#calendar-google','#calendar-description','#save-calendar','#calendar-choice','#calendar-close'].map(selector=>[selector,{}]));
+ nodes['#calendar-choice'].showModal=function(){this.open=true;};nodes['#calendar-choice'].close=function(){this.open=false;};
+ const context={$:selector=>nodes[selector],TemuInviteCalendar:require('../dist/invitation2-calendar.js'),navigator:{userAgent:platform,platform:'',maxTouchPoints:0},location:{origin:'https://example.com'}};
+ const source=fs.readFileSync(path.join(__dirname,'../dist/invitation2.js'),'utf8');
+ vm.runInNewContext(source.slice(source.indexOf('function setupCalendar(')),context);
+ context.setupCalendar({date:'2026-11-21'},{ceremonyTime:akad==='y'?'15.30 WIB - 17.00 WIB':'Family Only',receptionTime:'18.30 WIB - 20.30 WIB'},{guest:{akad,calendarPath:'/api/invite/calendar.ics?g=test&c=signature'}});
+ const google=new URL(nodes['#calendar-google'].href).searchParams;
+ assert.equal(google.get('dates'),akad==='y'?'20261121T083000Z/20261121T133000Z':'20261121T113000Z/20261121T133000Z');
+ assert.equal(google.get('details').includes('Akad:'),akad==='y');
+ if(platform==='Android'){
+  assert.ok(nodes['#calendar-native'].href.includes('l.beginTime='+Date.parse(akad==='y'?'2026-11-21T15:30:00+07:00':'2026-11-21T18:30:00+07:00')+';'));
+  assert.equal(decodeURIComponent(nodes['#calendar-native'].href).includes('Akad:'),akad==='y');
+ }else assert.equal(nodes['#calendar-native'].href,'webcal://example.com/api/invite/calendar.ics?g=test&c=signature');
+ nodes['#save-calendar'].onclick({preventDefault(){}});assert.equal(nodes['#calendar-choice'].open,true);
+ nodes['#calendar-close'].onclick();assert.equal(nodes['#calendar-choice'].open,false);
 });
