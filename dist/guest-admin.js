@@ -27,6 +27,41 @@ async function loadRsvp(){
 }
 $('#refresh-rsvp').onclick=loadRsvp;
 
+async function showWishManagement(){
+ if(!await admin())return;
+ modal('Kelola doa & ucapan','<div class="actions"><button id="wish-admin-refresh" type="button">Perbarui</button></div><p id="wish-admin-status" role="status">Memuat doa dan ucapan…</p><div id="wish-admin-list" class="wish-admin-list"></div>');
+ const list=$('#wish-admin-list'),status=$('#wish-admin-status');$('#wish-admin-refresh').onclick=showWishManagement;
+ try{
+  const record=await TemuStore.read();if(!record.config.enabled||!record.config.token)throw Error('Hubungkan server untuk mengelola doa dan ucapan.');
+  const response=await fetch('/api/invite/admin/wishes',{headers:{'Authorization':'Bearer '+record.config.token},cache:'no-store',signal:AbortSignal.timeout(12000)}),data=await response.json();
+  if(!response.ok)throw Error(data.error||'Doa dan ucapan belum dapat dimuat.');
+  if($('#wish-admin-list')!==list||!$('#modal').open)return;
+  if(data.event!==db.event.id)throw Error('Acara berubah. Buka kembali daftar doa dan ucapan.');
+  status.textContent=data.wishes.length+' doa dan ucapan.';
+  list.innerHTML=data.wishes.length?data.wishes.map(item=>`<article class="card wish-admin-card"><h3>${esc(item.name)}</h3><p>${esc(item.message)}</p><small>${esc(new Date(item.updated).toLocaleString('id-ID'))}</small><div class="actions"><button type="button" class="danger" data-delete-wish="${esc(item.guest)}">Hapus ucapan</button></div></article>`).join(''):'<p>Belum ada doa dan ucapan.</p>';
+  list.onclick=event=>{const button=event.target.closest('[data-delete-wish]'),item=data.wishes.find(item=>item.guest===button?.dataset.deleteWish);if(item)showDeleteWish(item,data.event);};
+ }catch(error){if($('#wish-admin-list')===list)status.textContent=error.message;}
+}
+function showDeleteWish(item,event){
+ if(!db.pin)return toast('Atur dan sinkronkan PIN pengelola sebelum menghapus ucapan.');
+ modal('Hapus doa & ucapan?',`<p>Hapus ucapan dari <strong>${esc(item.name)}</strong> pada undangan digital? Data tamu dan RSVP tetap tersimpan. Tindakan ini tidak dapat dibatalkan dari aplikasi.</p><blockquote class="wish-admin-message">${esc(item.message)}</blockquote><form id="wish-delete-form"><label>Masukkan ulang PIN pengelola<input id="wish-delete-pin" type="password" inputmode="numeric" pattern="[0-9]{4,12}" required autocomplete="off"></label><div class="actions"><button type="submit" class="danger">Hapus ucapan</button><button id="wish-delete-cancel" type="button">Batal</button></div><p id="wish-delete-status" role="status"></p></form>`);
+ const form=$('#wish-delete-form'),status=$('#wish-delete-status');
+ $('#wish-delete-cancel').onclick=showWishManagement;
+ form.onsubmit=async e=>{
+  e.preventDefault();const button=$('#wish-delete-form button[type=submit]'),pin=$('#wish-delete-pin').value;button.disabled=true;
+  try{
+   if(event!==db.event.id)throw Error('Acara berubah. Buka kembali daftar doa dan ucapan.');
+   const record=await TemuStore.read();if(!record.config.enabled||!record.config.token)throw Error('Hubungkan server untuk menghapus ucapan.');
+   if(!$('#modal').open||$('#wish-delete-form')!==form)return;
+   const response=await fetch('/api/invite/admin/wishes/delete',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+record.config.token,'X-Temu-Invite':'1'},body:JSON.stringify({event,guest:item.guest,updated:item.updated,pin}),cache:'no-store',signal:AbortSignal.timeout(12000)}),data=await response.json();
+   if(!response.ok||!data.ok)throw Error(data.error||'Ucapan belum dapat dihapus.');
+   toast('Doa dan ucapan dihapus.');if($('#modal').open&&$('#wish-delete-form')===form)await showWishManagement();
+  }catch(error){if($('#modal').open&&$('#wish-delete-form')===form)status.textContent=error.message;}
+  finally{button.disabled=false;}
+ };
+}
+$('#manage-wishes').onclick=showWishManagement;
+
 async function resetInvitationDevice(g){
  modal('Pulihkan akses · '+g.name,`<p>Tautan lama akan dibatalkan. Tautan pengganti dapat dibuka pertama kali pada browser tamu yang baru. QR check-in tetap sama.</p><form id="reset-device-form"><label>Masukkan ulang PIN pengelola<input id="reset-device-pin" type="password" inputmode="numeric" pattern="[0-9]{4,12}" required autocomplete="off"></label><button class="primary">Buat tautan pengganti</button><p id="reset-device-status" role="status"></p></form>`);
  $('#reset-device-form').onsubmit=async event=>{event.preventDefault();const button=$('#reset-device-form button');button.disabled=true;try{await syncNow();const record=await TemuStore.read();if(record.outbox.length||record.conflicts.some(x=>!x.resolved))throw Error('Selesaikan sinkronisasi terlebih dahulu.');const response=await fetch('/api/invite/admin/reset-device',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+record.config.token,'X-Temu-Invite':'1'},body:JSON.stringify({event:db.event.id,guest:g.id,pin:$('#reset-device-pin').value}),cache:'no-store',signal:AbortSignal.timeout(12000)}),data=await response.json();if(!response.ok)throw Error(data.error||'Akses belum dapat dipulihkan.');await showGuestInvitation(g);}catch(error){if($('#reset-device-status'))$('#reset-device-status').textContent=error.message;}finally{button.disabled=false;}};

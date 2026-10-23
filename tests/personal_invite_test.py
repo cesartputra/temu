@@ -128,6 +128,52 @@ class PersonalInvitationTests(unittest.TestCase):
   with self.assertRaises(urllib.error.HTTPError) as error:urllib.request.urlopen(self.origin+info['guest']['calendarPath'])
   self.assertEqual(error.exception.code,403);error.exception.close()
 
+ def test_admin_deletes_one_wish_without_changing_guest_rsvp_or_other_wishes(self):
+  self.state['pin']=hashlib.sha256(b'wedding:1234').hexdigest()
+  self.state['guests'].append({**self.state['guests'][0],'id':'g2','code':'qr2','name':'Tamu Kedua'})
+  with self.db.connect() as c:c.execute('UPDATE events SET state=?',(json.dumps(self.state),))
+  first=self.db.guest_link('wedding','g');second=self.db.guest_link('wedding','g2')
+  self.post('/api/invite/guest',first);self.post('/api/invite/rsvp',{**first,'status':'attending','count':2})
+  self.post('/api/invite/wish',{**first,'message':'Ucapan pertama'});self.db.save_wish(second['guest'],second['key'],'Ucapan kedua')
+  with urllib.request.urlopen(urllib.request.Request(self.origin+'/api/invite/admin/wishes',headers={'Authorization':'Bearer '+self.token})) as response:
+   listing=json.load(response);self.assertEqual(response.headers['Cache-Control'],'no-store')
+  self.assertEqual(listing['event'],'wedding');self.assertEqual(len(listing['wishes']),2)
+  item=next(item for item in listing['wishes'] if item['guest']=='g')
+  self.assertEqual(item['name'],'Tamu Uji & Pasangan');self.assertEqual(item['message'],'Ucapan pertama')
+  self.assertEqual(self.post('/api/invite/admin/wishes/delete',{'event':'wedding','guest':'g','updated':item['updated'],'pin':'1234'},True),{'ok':True})
+  self.assertIsNone(self.post('/api/invite/guest',first)['wish'])
+  self.assertEqual(self.db.rsvp_overview('wedding')['summary']['persons'],2)
+  with self.db.connect() as c:self.assertEqual(json.loads(c.execute('SELECT state FROM events').fetchone()[0]),self.state)
+  self.assertEqual([item['message'] for item in server.Database(self.tmp.name).public_wishes()],['Ucapan kedua'])
+
+ def test_wish_management_rejects_guests_wrong_pin_and_outdated_confirmation(self):
+  self.state['pin']=hashlib.sha256(b'wedding:1234').hexdigest()
+  with self.db.connect() as c:c.execute('UPDATE events SET state=?',(json.dumps(self.state),))
+  link=self.db.guest_link('wedding','g');self.post('/api/invite/guest',link)
+  info=self.post('/api/invite/wish',{**link,'message':'Ucapan lama'})
+  payload={'event':'wedding','guest':'g','updated':info['wish']['updated'],'pin':'1234'}
+  with self.assertRaises(urllib.error.HTTPError) as failure:self.opener.open(self.origin+'/api/invite/admin/wishes')
+  self.assertEqual(failure.exception.code,401);failure.exception.close()
+  with self.assertRaises(urllib.error.HTTPError) as failure:self.post('/api/invite/admin/wishes/delete',payload)
+  self.assertEqual(failure.exception.code,401);failure.exception.close()
+  for pin in ('0000','',None):
+   with self.assertRaises(urllib.error.HTTPError) as failure:self.post('/api/invite/admin/wishes/delete',{**payload,'pin':pin},True)
+   self.assertEqual(failure.exception.code,403);failure.exception.close()
+  self.post('/api/invite/wish',{**link,'message':'Ucapan sudah diperbarui'})
+  with self.assertRaises(urllib.error.HTTPError) as failure:self.post('/api/invite/admin/wishes/delete',payload,True)
+  self.assertEqual(failure.exception.code,409);failure.exception.close()
+  self.assertEqual(self.db.public_wishes()[0]['message'],'Ucapan sudah diperbarui')
+  request=urllib.request.Request(self.origin+'/api/invite/admin/wishes/delete',data=json.dumps(payload).encode(),headers={'Authorization':'Bearer '+self.token,'Content-Type':'application/json'})
+  with self.assertRaises(urllib.error.HTTPError) as failure:self.opener.open(request)
+  self.assertEqual(failure.exception.code,403);failure.exception.close()
+
+ def test_wish_deletion_rejects_invalid_identifiers(self):
+  self.state['pin']=hashlib.sha256(b'wedding:1234').hexdigest()
+  with self.db.connect() as c:c.execute('UPDATE events SET state=?',(json.dumps(self.state),))
+  for invalid in ({'event':[]},{'guest':None},{'updated':{}},{'guest':''},{'updated':'x'*201}):
+   with self.assertRaises(urllib.error.HTTPError) as failure:self.post('/api/invite/admin/wishes/delete',{'event':'wedding','guest':'g','updated':'2026-10-23T00:00:00Z','pin':'1234',**invalid},True)
+   self.assertEqual(failure.exception.code,400);failure.exception.close()
+
 
 
  def test_gallery_upload_is_private_and_rejects_unlisted_names(self):

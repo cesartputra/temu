@@ -324,6 +324,20 @@ class Database:
             event,state=rows[0][0],json.loads(rows[0][1]);guests={g['id']:g for g in state['guests'] if g['active'] and not g.get('deleted')}
             statuses={g:status for g,status in c.execute('SELECT guest,status FROM rsvps WHERE event=?',(event,))}
             return [{'name':guests[g]['name']+(' & Pasangan' if guests[g]['quota']==2 else ' & Keluarga' if guests[g]['quota']>2 else ''),'status':statuses.get(g,'pending'),'message':message,'updated':updated} for g,message,updated in c.execute('SELECT guest,message,updated FROM wishes WHERE event=? ORDER BY updated DESC',(event,)) if g in guests]
+    def admin_wishes(self,event):
+        with self.connect() as c:
+            row=c.execute('SELECT state FROM events WHERE id=?',(event,)).fetchone()
+            if not row:raise ValueError('Acara tidak ditemukan.')
+            guests={g['id']:g for g in json.loads(row[0])['guests'] if not g.get('deleted')}
+            return [{'guest':g,'name':guests[g]['name']+(' & Pasangan' if guests[g]['quota']==2 else ' & Keluarga' if guests[g]['quota']>2 else ''),'message':message,'updated':updated} for g,message,updated in c.execute('SELECT guest,message,updated FROM wishes WHERE event=? ORDER BY updated DESC',(event,)) if g in guests]
+    def delete_wish(self,event,guest,updated,pin):
+        if any(not isinstance(value,str) or not 1<=len(value)<=200 for value in (event,guest,updated)):raise ValueError('Doa dan ucapan tidak valid.')
+        with self.lock,self.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            if not self.verify_pin(event,pin):raise Denied('PIN tidak sesuai. Atur dan sinkronkan PIN pengelola terlebih dahulu.')
+            deleted=c.execute('DELETE FROM wishes WHERE event=? AND guest=? AND updated=?',(event,guest,updated)).rowcount==1
+        if deleted:self.backup(force=True)
+        return deleted
     def rsvp_overview(self,event):
         with self.connect() as c:
             row=c.execute('SELECT state FROM events WHERE id=?',(event,)).fetchone()
@@ -497,6 +511,10 @@ def make_handler(database,token,allowed_hosts):
                 if not self.authorized():return self.reply(401,{'error':'Akses pengelola diperlukan.'})
                 events=database.events()
                 return self.reply(200,database.rsvp_overview(events[0]['id'])) if len(events)==1 else self.reply(404,{'error':'Acara belum tersedia.'})
+            if path=='/api/invite/admin/wishes':
+                if not self.authorized():return self.reply(401,{'error':'Akses pengelola diperlukan.'})
+                events=database.events()
+                return self.reply(200,{'event':events[0]['id'],'wishes':database.admin_wishes(events[0]['id'])}) if len(events)==1 else self.reply(404,{'error':'Acara belum tersedia.'})
             if path.startswith('/api/invite/'):
                 try:
                     if path=='/api/invite/view':return self.reply(200,guest_access.session(self.headers.get('Cookie','')))
@@ -560,6 +578,15 @@ def make_handler(database,token,allowed_hosts):
                     return self.reply(200,database.save_wish(guest,key,body.get('message')))
                 except (ValueError,TypeError) as e:return self.reply(400,{'error':str(e)})
                 except Denied as e:return self.reply(403,{'error':str(e)})
+            if self.path=='/api/invite/admin/wishes/delete':
+                if not self.authorized():return self.reply(401,{'error':'Akses pengelola diperlukan.'})
+                try:
+                    body=self.invite_body()
+                    if not database.delete_wish(body.get('event'),body.get('guest'),body.get('updated'),body.get('pin')):return self.reply(409,{'error':'Ucapan berubah atau telah dihapus. Perbarui daftar lalu coba lagi.'})
+                    return self.reply(200,{'ok':True})
+                except (ValueError,TypeError) as error:return self.reply(400,{'error':str(error)})
+                except Denied as error:return self.reply(403,{'error':str(error)})
+                except (OSError,sqlite3.Error):return self.reply(503,{'error':'Ucapan belum dapat dihapus. Coba lagi.'})
             if self.path in ('/api/invite/admin/link','/api/invite/admin/reset-device'):
                 if not self.authorized():return self.reply(401,{'error':'Akses pengelola diperlukan.'})
                 try:
