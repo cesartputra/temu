@@ -10,12 +10,33 @@ async function guestInvitationURL(g){
 }
 async function showGuestInvitation(g){
  modal('Undangan digital · '+g.name,'<p id="invite-loading">Menyiapkan tautan unik tamu…</p>');
- try{const link=await guestInvitationURL(g);if(!$('#invite-loading'))return;const url=new URL(link);
- $('#modal-body').innerHTML=`<p>Tautan ini menampilkan sapaan khusus untuk <strong>${esc(g.name)}</strong>, serta memungkinkan RSVP dan kirim doa. Akses dikunci ke browser pertama yang membuka tautan; QR masuk dibagikan terpisah. Jangan buka tautan tamu dari perangkat pengelola.</p><label>Tautan unik tamu<input id="personal-invite-link" readonly value="${esc(link)}"></label><div class="actions"><button id="reset-invitation-device">Pulihkan akses perangkat</button><button id="copy-public-link">Salin tautan</button><button id="share-public-invite" class="primary">Siapkan QR + tautan WhatsApp</button></div><p class="hint">${url.hostname==='localhost'||url.hostname==='127.0.0.1'?'Alamat masih lokal dan tidak dapat dibuka di ponsel tamu. Siapkan hosting HTTPS.':'Bagikan langsung kepada tamu yang dituju. Browser pertama yang membuka tautan akan menjadi browser pemilik akses.'}</p>`;
+ const loading=$('#invite-loading');
+ try{const link=await guestInvitationURL(g);if($('#invite-loading')!==loading||!$('#modal').open)return;const url=new URL(link),isPublic=db.guests.find(guest=>guest.id===g.id)?.invitationMode==='public';
+ $('#modal-body').innerHTML=`<p>Tautan ini menampilkan sapaan khusus untuk <strong>${esc(g.name)}</strong>, serta memungkinkan RSVP dan kirim doa. QR masuk dibagikan terpisah.</p><label>Mode akses undangan</label><button id="invitation-access-toggle" type="button" class="guest-toggle ${isPublic?'is-on':''}" role="switch" aria-checked="${isPublic}" aria-label="Akses Public untuk ${esc(g.name)}"><span class="toggle-track" aria-hidden="true"></span><span>${isPublic?'Public':'Private'}</span></button><p>${isPublic?'Public: tautan dapat dibuka di beberapa browser. Siapa pun yang memiliki tautan bisa mengisi RSVP dan ucapan atas nama tamu ini.':'Private: akses dikunci ke browser pertama yang membuka tautan. Jangan buka tautan tamu dari perangkat pengelola.'}</p><label>Tautan unik tamu<input id="personal-invite-link" readonly value="${esc(link)}"></label><div class="actions"><button id="reset-invitation-device">Pulihkan akses perangkat</button><button id="copy-public-link">Salin tautan</button><button id="share-public-invite" class="primary">Siapkan QR + tautan WhatsApp</button></div><p class="hint">${url.hostname==='localhost'||url.hostname==='127.0.0.1'?'Alamat masih lokal dan tidak dapat dibuka di ponsel tamu. Siapkan hosting HTTPS.':'URL undangan tetap sama saat mode Private/Public diubah.'}</p>`;
+ $('#invitation-access-toggle').onclick=()=>showInvitationAccessChange(g);
  $('#reset-invitation-device').onclick=()=>resetInvitationDevice(g);
  $('#copy-public-link').onclick=async()=>{try{await navigator.clipboard.writeText(link);toast('Tautan disalin.');}catch{$('#personal-invite-link').select();toast('Pilih dan salin tautan secara manual.');}};
  $('#share-public-invite').onclick=()=>{if(url.hostname==='localhost'||url.hostname==='127.0.0.1')return toast('Atur alamat publik HTTPS sebelum membagikan tautan.');showWhatsApp(g,link);};
- }catch(error){if($('#invite-loading'))$('#invite-loading').textContent=error.message;}
+ }catch(error){if($('#invite-loading')===loading)loading.textContent=error.message;}
+}
+async function showInvitationAccessChange(g){
+ if(!await admin())return;
+ const current=db.guests.find(guest=>guest.id===g.id&&guest.active&&!guest.deleted);if(!current)return toast('Undangan sudah tidak aktif.');
+ const mode=current.invitationMode==='public'?'private':'public',publicMode=mode==='public';
+ modal('Ubah akses menjadi '+(publicMode?'Public':'Private')+'?',`<p>URL undangan <strong>${esc(current.name)}</strong> yang sudah dibagikan tetap sama.</p><p>${publicMode?'Siapa pun yang memiliki tautan dapat membuka undangan dari browser mana saja, serta mengisi RSVP dan ucapan atas nama tamu ini.':'Browser pemilik sebelumnya tetap mendapat akses. Jika belum ada pemilik, browser pertama yang membuka tautan setelah mode Private aktif menjadi pemiliknya.'}</p><div class="actions"><button id="invitation-access-confirm" type="button" class="primary">Jadikan ${publicMode?'Public':'Private'}</button><button id="invitation-access-cancel" type="button">Batal</button></div><p id="invitation-access-status" role="status"></p>`);
+ const button=$('#invitation-access-confirm'),status=$('#invitation-access-status');$('#invitation-access-cancel').onclick=()=>showGuestInvitation(current);
+ button.onclick=async()=>{
+  button.disabled=true;
+  try{
+   if((db.guests.find(guest=>guest.id===g.id)?.invitationMode||'private')!==mode)await commit(state=>{const guest=state.guests.find(guest=>guest.id===g.id&&guest.active&&!guest.deleted);if(!guest)throw Error('Undangan sudah tidak aktif.');guest.invitationMode=mode;});
+   await syncNow();const record=await TemuStore.read(),saved=record.state.guests.find(guest=>guest.id===g.id&&guest.active&&!guest.deleted);
+   if(!saved)throw Error('Undangan sudah tidak aktif. Perbarui daftar tamu.');
+   if(!record.config.enabled||!record.config.token||record.outbox.length||record.conflicts.some(conflict=>!conflict.resolved)||(saved.invitationMode||'private')!==mode)throw Error('Perubahan belum diterapkan di server. Hubungkan dan sinkronkan server, periksa konflik, lalu coba lagi.');
+   toast('Akses '+(publicMode?'Public':'Private')+' tersimpan. URL undangan tetap sama.');
+   if($('#modal').open&&$('#invitation-access-confirm')===button)await showGuestInvitation(saved);
+  }catch(error){if($('#modal').open&&$('#invitation-access-confirm')===button)status.textContent=error.message;}
+  finally{button.disabled=false;}
+ };
 }
 async function loadRsvp(){
  const summary=$('#rsvp-summary'),list=$('#rsvp-list');if(!summary||!list)return;

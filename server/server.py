@@ -48,6 +48,7 @@ def validate(s):
                 datetime.fromisoformat(g[key].replace('Z','+00:00'))
         if 'vip' in g and g['vip'] not in ('y','n'):raise ValueError('Pilihan VIP harus y atau n.')
         if 'akad' in g and g['akad'] not in ('y','n'):raise ValueError('Pilihan akad harus y atau n.')
+        if 'invitationMode' in g and g['invitationMode'] not in ('private','public'):raise ValueError('Akses undangan harus private atau public.')
         if 'phone' in g and (not isinstance(g['phone'],str) or (g['phone'] and not re.fullmatch(r'[1-9]\d{7,14}',g['phone']))):raise ValueError('Nomor WhatsApp tidak valid.')
         if 'deleted' in g and (type(g['deleted']) is not bool or (g['deleted'] and (g['active'] or g['name']!='Tamu dihapus' or g.get('phone') or g['group']))):raise ValueError('Tamu yang dihapus tidak valid.')
         ids.add(g['id']);codes.add(g['code'])
@@ -107,6 +108,7 @@ class Database:
             CREATE TABLE IF NOT EXISTS app_secrets(name TEXT PRIMARY KEY,value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS rsvps(event TEXT NOT NULL,guest TEXT NOT NULL,status TEXT NOT NULL,count INTEGER NOT NULL,updated TEXT NOT NULL,PRIMARY KEY(event,guest));
             CREATE TABLE IF NOT EXISTS invitation_devices(event TEXT NOT NULL,guest TEXT NOT NULL,device_hash TEXT NOT NULL,PRIMARY KEY(event,guest));
+            CREATE TABLE IF NOT EXISTS invitation_public_devices(event TEXT NOT NULL,guest TEXT NOT NULL,device_hash TEXT NOT NULL,PRIMARY KEY(event,guest,device_hash));
             CREATE TABLE IF NOT EXISTS invitation_link_versions(event TEXT NOT NULL,guest TEXT NOT NULL,nonce TEXT NOT NULL,PRIMARY KEY(event,guest));
             CREATE TABLE IF NOT EXISTS wishes(event TEXT NOT NULL,guest TEXT NOT NULL,message TEXT NOT NULL,updated TEXT NOT NULL,PRIMARY KEY(event,guest));
             ''')
@@ -144,6 +146,7 @@ class Database:
             c.execute('DELETE FROM rsvps WHERE event=?',(event,))
             c.execute('DELETE FROM wishes WHERE event=?',(event,))
             c.execute('DELETE FROM invitation_devices WHERE event=?',(event,))
+            c.execute('DELETE FROM invitation_public_devices WHERE event=?',(event,))
             c.execute('DELETE FROM invitation_link_versions WHERE event=?',(event,))
             if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='invitation_access'").fetchone():
                 links=[row[0] for row in c.execute('SELECT link_hash FROM invitation_access WHERE event=?',(event,))]
@@ -205,6 +208,7 @@ class Database:
                                 c.execute('DELETE FROM rsvps WHERE event=? AND guest=?',(event,change['id']))
                                 c.execute('DELETE FROM wishes WHERE event=? AND guest=?',(event,change['id']))
                                 c.execute('DELETE FROM invitation_devices WHERE event=? AND guest=?',(event,change['id']))
+                                c.execute('DELETE FROM invitation_public_devices WHERE event=? AND guest=?',(event,change['id']))
                                 c.execute('DELETE FROM invitation_link_versions WHERE event=? AND guest=?',(event,change['id']))
                             elif change['after']['active']:
                                 c.execute("UPDATE rsvps SET count=MIN(count,?),updated=? WHERE event=? AND guest=? AND status='attending' AND count>?",(change['after']['quota'],now(),event,change['id'],change['after']['quota']))
@@ -218,12 +222,14 @@ class Database:
     def events(self):
         with self.connect() as c:return [{'id':r[0],'name':json.loads(r[1])['event']['name'],'updated':r[2]} for r in c.execute('SELECT id,state,updated FROM events ORDER BY updated DESC')]
     def public_event(self,device=None,guest=None):
-        with self.connect() as c:rows=c.execute('SELECT state FROM events LIMIT 2').fetchall()
-        if len(rows)!=1:return None
-        state=json.loads(rows[0][0]);event=copy.deepcopy(state['event'])
         hashed=hashlib.sha256((device or '').encode()).hexdigest()
-        with self.connect() as c:bound=[row[0] for row in c.execute('SELECT guest FROM invitation_devices WHERE device_hash=?',(hashed,))]
-        allowed=any(g['id'] in bound and (guest is None or g['id']==guest) and g.get('akad')=='y' and g['active'] and not g.get('deleted') for g in state['guests'])
+        with self.connect() as c:
+            c.execute('BEGIN');rows=c.execute('SELECT id,state FROM events LIMIT 2').fetchall()
+            if len(rows)!=1:return None
+            event_id,state=rows[0][0],json.loads(rows[0][1]);event=copy.deepcopy(state['event'])
+            private={row[0] for row in c.execute('SELECT guest FROM invitation_devices WHERE event=? AND device_hash=?',(event_id,hashed))}
+            public={row[0] for row in c.execute('SELECT guest FROM invitation_public_devices WHERE event=? AND device_hash=?',(event_id,hashed))}
+        allowed=any((g['id'] in private or g.get('invitationMode','private')=='public' and g['id'] in public) and (guest is None or g['id']==guest) and g.get('akad')=='y' and g['active'] and not g.get('deleted') for g in state['guests'])
         # Accept old synced settings, but never publish editable gift accounts.
         for key in ('giftBank','giftAccount','giftName'):event.get('wedding',{}).pop(key,None)
         if not allowed:event.setdefault('wedding',{})['ceremonyTime']='Family Only'
@@ -246,46 +252,56 @@ class Database:
                 if g and hmac.compare_digest(self.calendar_signature(c,event,g),signature):return calendar_feed(state['event'],g.get('akad')=='y')
         raise Denied('Kalender tidak tersedia.')
     def invite_guest(self,guest,key):
-        if not isinstance(guest,str) or not 1<=len(guest)<=200 or not isinstance(key,str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}',key):raise ValueError('Tautan tamu tidak valid.')
         with self.connect() as c:
-            rows=c.execute('SELECT id,state FROM events LIMIT 2').fetchall()
-            if len(rows)!=1:raise ValueError('Acara tidak tersedia.')
-            event,state=rows[0][0],json.loads(rows[0][1])
-            if not hmac.compare_digest(key,self.invite_signature(c,event,guest)):raise ValueError('Tautan tamu tidak valid.')
-            found=next((g for g in state['guests'] if g['id']==guest and g['active'] and not g.get('deleted')),None)
-            if not found:raise ValueError('Undangan tamu tidak aktif.')
-            rsvp=c.execute('SELECT status,count,updated FROM rsvps WHERE event=? AND guest=?',(event,guest)).fetchone()
-            wish=c.execute('SELECT message,updated FROM wishes WHERE event=? AND guest=?',(event,guest)).fetchone()
-            return {'event':event,'guest':{'name':found['name'],'quota':found['quota'],'akad':found.get('akad','n'),'qr':encode({'v':1,'event':event,'code':found['code']}),'calendarPath':'/api/invite/calendar.ics?'+urlencode({'g':guest,'c':self.calendar_signature(c,event,found)})},'rsvp':{'status':rsvp[0],'count':rsvp[1],'updated':rsvp[2]} if rsvp else None,'wish':{'message':wish[0],'updated':wish[1]} if wish else None}
+            c.execute('BEGIN')
+            return self._invite_guest(c,guest,key)
+    def _invite_guest(self,c,guest,key):
+        if not isinstance(guest,str) or not 1<=len(guest)<=200 or not isinstance(key,str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}',key):raise ValueError('Tautan tamu tidak valid.')
+        rows=c.execute('SELECT id,state FROM events LIMIT 2').fetchall()
+        if len(rows)!=1:raise ValueError('Acara tidak tersedia.')
+        event,state=rows[0][0],json.loads(rows[0][1])
+        if not hmac.compare_digest(key,self.invite_signature(c,event,guest)):raise ValueError('Tautan tamu tidak valid.')
+        found=next((g for g in state['guests'] if g['id']==guest and g['active'] and not g.get('deleted')),None)
+        if not found:raise ValueError('Undangan tamu tidak aktif.')
+        rsvp=c.execute('SELECT status,count,updated FROM rsvps WHERE event=? AND guest=?',(event,guest)).fetchone()
+        wish=c.execute('SELECT message,updated FROM wishes WHERE event=? AND guest=?',(event,guest)).fetchone()
+        return {'event':event,'guest':{'name':found['name'],'quota':found['quota'],'akad':found.get('akad','n'),'invitationMode':found.get('invitationMode','private'),'qr':encode({'v':1,'event':event,'code':found['code']}),'calendarPath':'/api/invite/calendar.ics?'+urlencode({'g':guest,'c':self.calendar_signature(c,event,found)})},'rsvp':{'status':rsvp[0],'count':rsvp[1],'updated':rsvp[2]} if rsvp else None,'wish':{'message':wish[0],'updated':wish[1]} if wish else None}
     def bind_invitation_device(self,guest,key,device):
         # Validate before claiming; serialize first-open races across processes too.
         with self.lock:
-            info=self.invite_guest(guest,key)
             device=device or secrets.token_urlsafe(32)
             hashed=hashlib.sha256(device.encode()).hexdigest()
             with self.connect() as c:
                 c.execute('BEGIN IMMEDIATE')
-                if not hmac.compare_digest(key,self.invite_signature(c,info['event'],guest)):raise Denied('Tautan undangan sudah diganti. Gunakan tautan terbaru dari pengelola.')
-                row=c.execute('SELECT device_hash FROM invitation_devices WHERE event=? AND guest=?',(info['event'],guest)).fetchone()
-                if row and not hmac.compare_digest(row[0],hashed):raise Denied('Undangan ini sudah dibuka di perangkat lain. Hubungi pengelola jika Anda berganti perangkat.')
-                c.execute('INSERT OR IGNORE INTO invitation_devices VALUES(?,?,?)',(info['event'],guest,hashed))
-            if not row:self.backup(force=True)
+                info=self._invite_guest(c,guest,key)
+                if info['guest']['invitationMode']=='public':
+                    inserted=c.execute('INSERT OR IGNORE INTO invitation_public_devices VALUES(?,?,?)',(info['event'],guest,hashed)).rowcount==1
+                else:
+                    row=c.execute('SELECT device_hash FROM invitation_devices WHERE event=? AND guest=?',(info['event'],guest)).fetchone()
+                    if row and not hmac.compare_digest(row[0],hashed):raise Denied('Undangan ini sudah dibuka di perangkat lain. Hubungi pengelola jika Anda berganti perangkat.')
+                    inserted=c.execute('INSERT OR IGNORE INTO invitation_devices VALUES(?,?,?)',(info['event'],guest,hashed)).rowcount==1
+            if inserted:self.backup(force=info['guest']['invitationMode']=='private')
             return info,device
     def require_invitation_device(self,device,guest=None,key=None):
+        with self.connect() as c:
+            c.execute('BEGIN')
+            return self._require_invitation_device(c,device,guest,key)
+    def _require_invitation_device(self,c,device,guest=None,key=None):
         if not device:raise Denied('Buka undangan melalui tautan unik yang dikirimkan kepada Anda.')
         hashed=hashlib.sha256(device.encode()).hexdigest()
-        with self.connect() as c:
-            rows=c.execute('SELECT event,guest FROM invitation_devices WHERE device_hash=?',(hashed,)).fetchall()
-            for event,bound_guest in rows:
-                if guest is not None and guest!=bound_guest:continue
-                row=c.execute('SELECT state FROM events WHERE id=?',(event,)).fetchone()
-                if not row:continue
-                if not any(g['id']==bound_guest and g['active'] and not g.get('deleted') for g in json.loads(row[0])['guests']):continue
-                if key is not None and (not isinstance(key,str) or not hmac.compare_digest(key,self.invite_signature(c,event,bound_guest))):continue
-                return
+        rows=c.execute('SELECT event,guest,0 FROM invitation_devices WHERE device_hash=? UNION ALL SELECT event,guest,1 FROM invitation_public_devices WHERE device_hash=?',(hashed,hashed)).fetchall()
+        for event,bound_guest,public in rows:
+            if guest is not None and guest!=bound_guest:continue
+            row=c.execute('SELECT state FROM events WHERE id=?',(event,)).fetchone()
+            if not row:continue
+            found=next((g for g in json.loads(row[0])['guests'] if g['id']==bound_guest and g['active'] and not g.get('deleted')),None)
+            if not found or public and found.get('invitationMode','private')!='public':continue
+            if key is not None and (not isinstance(key,str) or not hmac.compare_digest(key,self.invite_signature(c,event,bound_guest))):continue
+            return
         raise Denied('Undangan ini sudah dibuka di perangkat lain atau aksesnya tidak lagi aktif.')
     def reset_invitation_device(self,event,guest,pin):
         with self.lock,self.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
             row=c.execute('SELECT state FROM events WHERE id=?',(event,)).fetchone()
             if not row:raise ValueError('Acara tidak ditemukan.')
             state=json.loads(row[0])
@@ -293,6 +309,7 @@ class Database:
             if not any(g['id']==guest and g['active'] and not g.get('deleted') for g in state['guests']):raise ValueError('Tamu tidak aktif.')
             c.execute('INSERT OR REPLACE INTO invitation_link_versions VALUES(?,?,?)',(event,guest,secrets.token_urlsafe(32)))
             c.execute('DELETE FROM invitation_devices WHERE event=? AND guest=?',(event,guest))
+            c.execute('DELETE FROM invitation_public_devices WHERE event=? AND guest=?',(event,guest))
         self.backup(force=True)
         return self.guest_link(event,guest)
     def guest_link(self,event,guest):
@@ -302,21 +319,28 @@ class Database:
             found=next((g for g in json.loads(row[0])['guests'] if g['id']==guest and g['active'] and not g.get('deleted')),None)
             if not found:raise ValueError('Tamu tidak aktif atau tidak ditemukan.')
             return {'guest':guest,'key':self.invite_signature(c,event,guest)}
-    def save_rsvp(self,guest,key,status,count):
+    def save_rsvp(self,guest,key,status,count,device=None):
         with self.lock:
-            info=self.invite_guest(guest,key)
-            if status not in ('attending','declined') or type(count) is not int or (status=='attending' and not 1<=count<=info['guest']['quota']) or (status=='declined' and count!=0):raise ValueError('Konfirmasi kehadiran tidak valid.')
-            with self.connect() as c:c.execute('INSERT INTO rsvps VALUES(?,?,?,?,?) ON CONFLICT(event,guest) DO UPDATE SET status=excluded.status,count=excluded.count,updated=excluded.updated',(info['event'],guest,status,count,now()))
+            with self.connect() as c:
+                c.execute('BEGIN IMMEDIATE')
+                if device is not None:self._require_invitation_device(c,device,guest,key)
+                info=self._invite_guest(c,guest,key)
+                if status not in ('attending','declined') or type(count) is not int or (status=='attending' and not 1<=count<=info['guest']['quota']) or (status=='declined' and count!=0):raise ValueError('Konfirmasi kehadiran tidak valid.')
+                updated=now();c.execute('INSERT INTO rsvps VALUES(?,?,?,?,?) ON CONFLICT(event,guest) DO UPDATE SET status=excluded.status,count=excluded.count,updated=excluded.updated',(info['event'],guest,status,count,updated))
+                info['rsvp']={'status':status,'count':count,'updated':updated}
             self.backup()
-            return self.invite_guest(guest,key)
-    def save_wish(self,guest,key,message):
+            return info
+    def save_wish(self,guest,key,message,device=None):
         with self.lock:
-            info=self.invite_guest(guest,key)
-            if not isinstance(message,str) or not 1<=len(message.strip())<=500:raise ValueError('Doa harus berisi 1–500 karakter.')
-            clean=message.strip()
-            with self.connect() as c:c.execute('INSERT INTO wishes VALUES(?,?,?,?) ON CONFLICT(event,guest) DO UPDATE SET message=excluded.message,updated=excluded.updated',(info['event'],guest,clean,now()))
+            with self.connect() as c:
+                c.execute('BEGIN IMMEDIATE')
+                if device is not None:self._require_invitation_device(c,device,guest,key)
+                info=self._invite_guest(c,guest,key)
+                if not isinstance(message,str) or not 1<=len(message.strip())<=500:raise ValueError('Doa harus berisi 1–500 karakter.')
+                clean=message.strip();updated=now();c.execute('INSERT INTO wishes VALUES(?,?,?,?) ON CONFLICT(event,guest) DO UPDATE SET message=excluded.message,updated=excluded.updated',(info['event'],guest,clean,updated))
+                info['wish']={'message':clean,'updated':updated}
             self.backup()
-            return self.invite_guest(guest,key)
+            return info
     def public_wishes(self):
         with self.connect() as c:
             rows=c.execute('SELECT id,state FROM events LIMIT 2').fetchall()
@@ -357,6 +381,7 @@ class Database:
             c.execute('DELETE FROM rsvps WHERE event=?',(event,))
             c.execute('DELETE FROM wishes WHERE event=?',(event,))
             c.execute('DELETE FROM invitation_devices WHERE event=?',(event,))
+            c.execute('DELETE FROM invitation_public_devices WHERE event=?',(event,))
             c.execute('DELETE FROM invitation_link_versions WHERE event=?',(event,))
             c.execute('DELETE FROM events WHERE id=?',(event,))
             c.execute('INSERT OR REPLACE INTO deleted_events VALUES(?,?)',(event,now()))
@@ -574,8 +599,8 @@ def make_handler(database,token,allowed_hosts):
                         info,device=database.bind_invitation_device(guest,key,self.device_token())
                         return self.reply(200,info,self.device_cookie(device))
                     database.require_invitation_device(self.device_token(),guest,key)
-                    if self.path.endswith('/rsvp'):return self.reply(200,database.save_rsvp(guest,key,body.get('status'),body.get('count')))
-                    return self.reply(200,database.save_wish(guest,key,body.get('message')))
+                    if self.path.endswith('/rsvp'):return self.reply(200,database.save_rsvp(guest,key,body.get('status'),body.get('count'),device=self.device_token() or ''))
+                    return self.reply(200,database.save_wish(guest,key,body.get('message'),device=self.device_token() or ''))
                 except (ValueError,TypeError) as e:return self.reply(400,{'error':str(e)})
                 except Denied as e:return self.reply(403,{'error':str(e)})
             if self.path=='/api/invite/admin/wishes/delete':

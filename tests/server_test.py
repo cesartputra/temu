@@ -10,6 +10,28 @@ def change(before,amount=1):
 class ServerTests(unittest.TestCase):
  def setUp(self):self.tmp=tempfile.TemporaryDirectory();self.db=server.Database(self.tmp.name);self.initial=seed();self.db.sync({'event':'wedding','operations':[bootstrap(self.initial)]})
  def tearDown(self):self.tmp.cleanup()
+ def test_invitation_mode_survives_sync_and_rejects_invalid_values(self):
+  op=change(self.initial,0);op['changes'][0]['after']['invitationMode']='public'
+  result=self.db.sync({'event':'wedding','operations':[op]})
+  self.assertTrue(result['results'][0]['ok']);self.assertEqual(result['state']['guests'][0]['invitationMode'],'public')
+  self.assertEqual(server.Database(self.tmp.name).sync({'event':'wedding','operations':[]})['state']['guests'][0]['invitationMode'],'public')
+  for value in ('Public','',None,True,[],{}):
+   with self.subTest(value=value):
+    bad=copy.deepcopy(result['state']);bad['guests'][0]['invitationMode']=value
+    self.assertRaises(ValueError,server.validate,bad)
+ def test_removing_guests_and_events_cleans_up_public_browser_grants(self):
+  for cleanup in ('guest','event','clear'):
+   with self.subTest(cleanup=cleanup),tempfile.TemporaryDirectory() as directory:
+    db=server.Database(directory);state=seed();state['pin']=hashlib.sha256(b'wedding:1234').hexdigest();state['guests'][0]['invitationMode']='public'
+    current=db.sync({'event':'wedding','operations':[bootstrap(state)]});link=db.guest_link('wedding','g')
+    db.bind_invitation_device('g',link['key'],'A'*43);db.bind_invitation_device('g',link['key'],'B'*43)
+    if cleanup=='guest':
+     op=change(state,0);op['changes'][0]['after']=None;op['logs']=[]
+     self.assertTrue(db.sync({'event':'wedding','operations':[op]})['results'][0]['ok'])
+    elif cleanup=='event':self.assertTrue(db.delete_event('wedding'))
+    else:db.clear_guests('wedding',current['revision'],'1234')
+    with db.connect() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM invitation_public_devices').fetchone()[0],0)
+    self.assertRaises(server.Denied,db.require_invitation_device,'A'*43)
  def test_vip_survives_sync_and_invalid_value_is_rejected(self):
   op=change(self.initial,0);op['changes'][0]['after']['vip']='y'
   result=self.db.sync({'event':'wedding','operations':[op]})

@@ -1,5 +1,5 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');const vm=require('node:vm');const fs=require('node:fs');const path=require('node:path');
-async function context(){const elements=new Map();const el=()=>({value:'',hidden:false,textContent:'',innerHTML:'',classList:{toggle(){}},contains(){return false},getContext(){return{}},showModal(){},close(){},addEventListener(){}});let saved;const c=vm.createContext({crypto:require('node:crypto').webcrypto,structuredClone,TextEncoder,TextDecoder,Uint8Array,Date,Set,JSON,indexedDB:new (require("fake-indexeddb").IDBFactory)(),qrcode:require('../dist/vendor/qrcode.js'),console,setTimeout,clearTimeout,alert(){},confirm(){return true},document:{querySelector(s){if(!elements.has(s))elements.set(s,el());return elements.get(s)},querySelectorAll(){return[]},createElement:el,addEventListener(){}},window:{addEventListener(){},print(){}},navigator:{},localStorage:{getItem(){return null},setItem(k,v){saved=v}},btoa,atob});for(const f of ['sync-model.js','storage.js','invitations.js','app.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../dist/'+f),'utf8'),c);vm.runInContext('function refreshSyncStatus(){};function scheduleSync(){};',c);await vm.runInContext('TemuStore.init(()=>db)',c);vm.runInContext('readFailed=false;',c);return c;}
+async function context(){const elements=new Map();const el=()=>({value:'',hidden:false,textContent:'',innerHTML:'',classList:{toggle(){}},contains(){return false},getContext(){return{}},showModal(){this.open=true},close(){this.open=false},addEventListener(){}});let saved;const c=vm.createContext({crypto:require('node:crypto').webcrypto,structuredClone,TextEncoder,TextDecoder,Uint8Array,Date,Set,JSON,indexedDB:new (require("fake-indexeddb").IDBFactory)(),qrcode:require('../dist/vendor/qrcode.js'),console,setTimeout,clearTimeout,alert(){},confirm(){return true},document:{querySelector(s){if(!elements.has(s))elements.set(s,el());return elements.get(s)},querySelectorAll(){return[]},createElement:el,addEventListener(){}},window:{addEventListener(){},print(){}},navigator:{},localStorage:{getItem(){return null},setItem(k,v){saved=v}},btoa,atob});for(const f of ['sync-model.js','storage.js','invitations.js','app.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../dist/'+f),'utf8'),c);vm.runInContext('function refreshSyncStatus(){};function scheduleSync(){};',c);await vm.runInContext('TemuStore.init(()=>db)',c);vm.runInContext('readFailed=false;',c);return c;}
 test('Check-in berulang dan jumlah berlebih ditolak; data tetap konsisten',async()=>{const c=await context();await vm.runInContext(`(async()=>{await commit(d=>d.guests.push({id:'g',code:'c',name:'Tamu Uji',group:'',quota:2,arrived:0,active:true}));await checkIn('g',1);await checkIn('g',1);})()`,c);assert.equal(vm.runInContext('db.guests[0].arrived',c),2);await assert.rejects(vm.runInContext("checkIn('g',1)",c));assert.equal(vm.runInContext('db.logs.length',c),2);});
 test('Undangan nonaktif dan jumlah negatif ditolak',async()=>{const c=await context();await vm.runInContext(`(async()=>{await commit(d=>d.guests.push({id:'g',code:'c',name:'Tamu',group:'',quota:2,arrived:0,active:false}));})()`,c);await assert.rejects(vm.runInContext("checkIn('g',1)",c));await assert.rejects(vm.runInContext("checkIn('g',-1)",c));});
 test('Hapus tamu membatalkan QR dan menghapus identitas tanpa menghilangkan riwayat hadir',async()=>{const c=await context();await vm.runInContext("commit(d=>d.guests.push({id:'g',code:'lama',name:'Tamu Uji',phone:'6281234567890',group:'Keluarga',quota:2,arrived:0,active:true}))",c);await vm.runInContext("removeGuest('g')",c);assert.equal(vm.runInContext('db.guests.length',c),0);await vm.runInContext("commit(d=>d.guests.push({id:'h',code:'lama2',name:'Tamu Hadir',phone:'628999999999',group:'Teman',quota:2,arrived:0,active:true}))",c);await vm.runInContext("checkIn('h',1)",c);await vm.runInContext("removeGuest('h')",c);assert.equal(vm.runInContext('db.guests[0].name',c),'Tamu dihapus');assert.equal(vm.runInContext('db.guests[0].phone',c),'');assert.equal(vm.runInContext('db.guests[0].active',c),false);assert.equal(vm.runInContext('db.logs.length',c),1);await assert.rejects(vm.runInContext("checkIn('h',1)",c));});
@@ -92,4 +92,49 @@ test('Check-in reguler tidak memunculkan peringatan VIP atau arahan WO',async()=
  assert.equal(vm.runInContext("document.querySelector('#modal-title').textContent",c),'Kehadiran tersimpan');
  assert.doesNotMatch(vm.runInContext("document.querySelector('#modal-body').innerHTML",c),/vip-arrival-notice|hubungi WO/);
  assert.doesNotMatch(vm.runInContext("document.querySelector('#recent').innerHTML",c),/recent-row-vip|Hubungi WO/);
+});
+
+async function invitationAccessContext(){
+ const c=await context();Object.assign(c,{URL,URLSearchParams,AbortSignal,location:{origin:'https://example.com'},fetch:async()=>({ok:true,json:async()=>({guest:'access-guest',key:'K'.repeat(43)})})});
+ vm.runInContext(fs.readFileSync(path.join(__dirname,'../dist/guest-admin.js'),'utf8'),c);
+ await vm.runInContext("commit(d=>d.guests.push({id:'access-guest',code:'unchanged-qr',name:'Tamu Akses',group:'',quota:2,arrived:0,active:true}))",c);
+ await c.TemuStore.transaction(record=>{record.config={enabled:true,token:'test-token'};return record;});
+ vm.runInContext("let accessSyncUnavailable=false,accessRemoveGuestOnSync=false;async function syncNow(){if(accessSyncUnavailable)return;const next=await TemuStore.transaction(record=>{record.outbox=[];if(accessRemoveGuestOnSync)record.state.guests=[];return record});db=next.state;}",c);
+ return c;
+}
+test('mode akses undangan menolak nilai tidak valid tanpa mengubah tamu',async()=>{
+ const c=await invitationAccessContext();
+ for(const value of ['PUBLIC','yes',true,{}])await assert.rejects(vm.runInContext('commit(d=>d.guests[0].invitationMode='+JSON.stringify(value)+')',c),/Mode akses undangan/);
+ assert.equal(vm.runInContext('db.guests[0].invitationMode',c),undefined);
+});
+test('toggle akses per tamu mempertahankan URL, QR dan kuota saat Public lalu Private',async()=>{
+ const c=await invitationAccessContext();await vm.runInContext('showGuestInvitation(db.guests[0])',c);
+ const original=vm.runInContext("document.querySelector('#modal-body').innerHTML.match(/id=\"personal-invite-link\" readonly value=\"([^\"]+)/)[1]",c);
+ assert.match(vm.runInContext("document.querySelector('#modal-body').innerHTML",c),/id="invitation-access-toggle"[^>]*aria-checked="false"/);
+ for(const mode of ['public','private']){
+  await vm.runInContext('showInvitationAccessChange(db.guests[0])',c);
+  assert.notEqual(vm.runInContext('db.guests[0].invitationMode',c),mode);
+  await vm.runInContext("document.querySelector('#invitation-access-confirm').onclick()",c);
+  assert.equal(vm.runInContext('db.guests[0].invitationMode',c),mode);
+  assert.equal(vm.runInContext('db.guests[0].code',c),'unchanged-qr');assert.equal(vm.runInContext('db.guests[0].quota',c),2);
+  assert.ok(vm.runInContext("document.querySelector('#modal-body').innerHTML",c).includes('value="'+original+'"'));
+  assert.equal((await c.TemuStore.read()).state.guests[0].invitationMode,mode);
+ }
+});
+test('akses yang belum tersinkron tidak diklaim aktif dan dapat dicoba ulang',async()=>{
+ const c=await invitationAccessContext();await vm.runInContext('showGuestInvitation(db.guests[0]);',c);
+ await vm.runInContext('showInvitationAccessChange(db.guests[0])',c);vm.runInContext('accessSyncUnavailable=true',c);
+ await vm.runInContext("document.querySelector('#invitation-access-confirm').onclick()",c);
+ assert.match(vm.runInContext("document.querySelector('#invitation-access-status').textContent",c),/belum diterapkan|belum berlaku/);
+ assert.ok((await c.TemuStore.read()).outbox.length>0);
+ vm.runInContext('accessSyncUnavailable=false',c);await vm.runInContext("document.querySelector('#invitation-access-confirm').onclick()",c);
+ assert.equal((await c.TemuStore.read()).outbox.length,0);
+ assert.match(vm.runInContext("document.querySelector('#modal-body').innerHTML",c),/aria-checked="true"/);
+});
+test('tamu yang dihapus saat sinkronisasi tidak diklaim berhasil menjadi Private',async()=>{
+ const c=await invitationAccessContext();await vm.runInContext("commit(d=>d.guests[0].invitationMode='public');showGuestInvitation(db.guests[0])",c);
+ await vm.runInContext('showInvitationAccessChange(db.guests[0])',c);vm.runInContext('accessRemoveGuestOnSync=true',c);
+ await vm.runInContext("document.querySelector('#invitation-access-confirm').onclick()",c);
+ assert.doesNotMatch(vm.runInContext("document.querySelector('#toast').textContent",c),/Akses Private tersimpan/);
+ assert.match(vm.runInContext("document.querySelector('#invitation-access-status').textContent",c),/belum diterapkan|tidak aktif/);
 });
