@@ -138,3 +138,12 @@ test('tamu yang dihapus saat sinkronisasi tidak diklaim berhasil menjadi Private
  assert.doesNotMatch(vm.runInContext("document.querySelector('#toast').textContent",c),/Akses Private tersimpan/);
  assert.match(vm.runInContext("document.querySelector('#invitation-access-status').textContent",c),/belum diterapkan|tidak aktif/);
 });
+
+test('RSVP WhatsApp column updates immediately after marking sent without reloading RSVP',async()=>{
+ const c=await context();vm.runInContext(fs.readFileSync(path.join(__dirname,'../dist/guest-admin.js'),'utf8'),c);
+ const cell={dataset:{rsvpWhatsapp:'wa'}};c.document.querySelectorAll=selector=>selector==='[data-rsvp-whatsapp]'?[cell]:[];
+ await vm.runInContext("commit(d=>d.guests.push({id:'wa',code:'qa',name:'Tamu',group:'',quota:2,arrived:0,active:true}))",c);
+ assert.equal(cell.textContent,'Belum ditandai kirim');
+ await vm.runInContext("markWhatsApp('wa','opened')",c);assert.equal(cell.textContent,'Dibuka · belum ditandai kirim');
+ await vm.runInContext("markWhatsApp('wa','sent')",c);assert.equal(cell.textContent,'Sudah kirim');assert.match(cell.className,/sent/);
+});

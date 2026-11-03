@@ -46,17 +46,21 @@ button.danger{border-color:#8d3e38;color:#8d3e38}button.danger:hover{background:
 .rsvp-summary>p{grid-column:1/-1;margin:0;padding:18px;background:#f7f9f6;border-radius:8px;font-size:.9rem}
 .rsvp-list{max-height:370px;overflow:auto;border:1px solid #e0e7e0;border-radius:10px}
 .rsvp-list:empty{display:none}
-.rsvp-list-head{position:sticky;top:0;z-index:1;display:flex;justify-content:space-between;gap:16px;padding:12px 18px;background:#f3f6f2;border-bottom:1px solid #e0e7e0;font-size:.7rem;letter-spacing:.08em;font-weight:700;text-transform:uppercase;color:#718075}
-.rsvp-row{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:16px 18px;background:#fff}
+.rsvp-list-head,.rsvp-row{display:grid;grid-template-columns:minmax(160px,1fr) minmax(150px,.85fr) minmax(140px,.85fr);min-width:560px;gap:16px;align-items:center}
+.rsvp-list-head{position:sticky;top:0;z-index:1;padding:12px 18px;background:#f3f6f2;border-bottom:1px solid #e0e7e0;font-size:.7rem;letter-spacing:.08em;font-weight:700;text-transform:uppercase;color:#718075}
+.rsvp-row{padding:16px 18px;background:#fff}
 .rsvp-row+.rsvp-row{border-top:1px solid #e9eee8}
 .rsvp-guest{display:flex;align-items:center;gap:12px;min-width:0}
 .rsvp-avatar{display:grid;place-items:center;flex-shrink:0;width:40px;height:40px;border-radius:50%;background:#eef2ea;color:#6c7b64;font:1.15rem Georgia,serif}
 .rsvp-guest strong{display:block;overflow-wrap:anywhere;font-size:.95rem;line-height:1.4}
 .rsvp-group{display:block;color:#7a877d;font-size:.78rem;margin-top:3px}
-.rsvp-status{display:inline-flex;align-items:center;gap:7px;flex-shrink:0;border-radius:30px;padding:8px 12px;font-size:.78rem;line-height:1.3;background:#f0f2ef;color:#6a756d;white-space:nowrap}
+.rsvp-status{justify-self:start;display:inline-flex;align-items:center;gap:7px;flex-shrink:0;border-radius:30px;padding:8px 12px;font-size:.78rem;line-height:1.3;background:#f0f2ef;color:#6a756d;white-space:nowrap}
 .rsvp-status:before{content:'';width:6px;height:6px;background:currentColor;border-radius:50%;flex-shrink:0}
 .rsvp-status.attending{background:#eaf4ed;color:#326449}
 .rsvp-status.declined{background:#fbefed;color:#96534a}
+.rsvp-whatsapp{white-space:normal}
+.rsvp-whatsapp.sent{background:#eaf4ed;color:#326449}
+.rsvp-whatsapp.opened{background:#fcf3e3;color:#8c6427}
 .rsvp-empty{padding:24px;text-align:center;margin:0;font-size:.9rem}
 .wish-admin-list{display:grid;gap:16px;margin-top:16px}.wish-admin-card h3{margin:0}.wish-admin-card p,.wish-admin-message{white-space:pre-wrap;overflow-wrap:anywhere}.wish-admin-message{margin:16px 0;padding:16px;background:#f6f7f4;border-left:3px solid var(--green)}
 @media(max-width:900px){.rsvp-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}

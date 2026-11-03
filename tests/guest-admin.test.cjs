@@ -32,3 +32,24 @@ for(const failDelete of [false,true])test(`a late deletion ${failDelete?'failure
  f.replace('#wish-delete-form');const status=f.replace('#wish-delete-status');f.element('#modal-body').innerHTML='Form lain dengan isi belum disimpan';f.finishDelete();await pending;
  assert.equal(f.element('#modal-body').innerHTML,'Form lain dengan isi belum disimpan');assert.equal(status.textContent,'');assert.equal(f.requests.length,1);
 });
+
+test('RSVP list adds a separate WhatsApp status column without changing RSVP results',async()=>{
+ const f=fixture();f.context.db.guests=[{id:'sent',whatsappSentAt:'2026-11-03T01:00:00Z'},{id:'opened',whatsappOpenedAt:'2026-11-03T01:00:00Z'},{id:'pending'}];
+ f.context.fetch=async()=>({ok:true,json:async()=>({summary:{attending:1,declined:0,pending:3,persons:2},guests:[{id:'sent',name:'Sent <Guest>',status:'pending'},{id:'opened',name:'Opened',status:'pending'},{id:'pending',name:'Pending',status:'attending',count:2},{id:'unknown',name:'Unknown',status:'pending'}]})});
+ f.context.document={querySelectorAll:()=>[]};
+ await f.context.loadRsvp();const html=f.element('#rsvp-list').innerHTML;
+ assert.match(html,/<span>Status WhatsApp<\/span><span>Status RSVP<\/span>/);
+ assert.equal((html.match(/data-rsvp-whatsapp=/g)||[]).length,4);
+ assert.match(html,/Sent &lt;Guest&gt;/);assert.match(html,/Hadir · 2 orang/);assert.equal((html.match(/Belum konfirmasi/g)||[]).length,3);
+});
+test('WhatsApp status updates from current synced guests, treats opened as unsent and handles missing guests',()=>{
+ const f=fixture(),cells=['sent','opened','pending','unknown'].map(id=>({dataset:{rsvpWhatsapp:id}}));
+ f.context.db.guests=[{id:'sent',whatsappSentAt:'2026-11-03T01:00:00Z',whatsappOpenedAt:'2026-11-02T01:00:00Z'},{id:'opened',whatsappOpenedAt:'2026-11-03T01:00:00Z'},{id:'pending'}];
+ f.context.document={querySelectorAll:selector=>{assert.equal(selector,'[data-rsvp-whatsapp]');return cells;}};
+ f.context.renderRsvpWhatsApp();
+ assert.match(cells[0].className,/sent/);assert.equal(cells[0].textContent,'Sudah kirim');
+ assert.match(cells[1].className,/opened/);assert.equal(cells[1].textContent,'Dibuka · belum ditandai kirim');
+ assert.equal(cells[2].textContent,'Belum ditandai kirim');assert.equal(cells[3].textContent,'Belum tercatat');
+ f.context.db.guests[1].whatsappSentAt='2026-11-03T02:00:00Z';f.context.renderRsvpWhatsApp();
+ assert.equal(cells[1].textContent,'Sudah kirim');assert.match(cells[1].className,/sent/);
+});
