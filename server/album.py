@@ -386,7 +386,13 @@ class Album:
         if obj:
             key=preview[0] if preview else obj[1] if query.get('thumb')==['1'] and obj[1] else obj[0]
             download='momen-'+item[:8]+ext if query.get('download')==['1'] else None
-            url=self.storage().presign('HEAD' if h.command=='HEAD' else 'GET',key,expires=300,download=download)
+            store=self.storage()
+            if h.command=='HEAD':
+                size,mime,_,_=store.inspect(key)
+                h.send_response(200);h.send_header('Content-Type',mime);h.send_header('Content-Length',str(size));h.send_header('Cache-Control','private, no-store');h.send_header('Cross-Origin-Resource-Policy','same-origin')
+                if download:h.send_header('Content-Disposition','attachment; filename="'+download+'"')
+                h.end_headers();return
+            url=store.presign('GET',key,expires=300,download=download)
             h.send_response(307);h.send_header('Location',url);h.send_header('Cache-Control','private, no-store');h.send_header('Content-Length','0');h.end_headers();return
         file=self.directory/(item+ext)
         if preview and (self.directory/preview[0]).is_file():file=self.directory/preview[0];mime='video/mp4';size=preview[1]

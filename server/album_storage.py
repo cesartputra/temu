@@ -48,7 +48,7 @@ class S3Storage:
         self.access=os.environ.get('TEMU_S3_ACCESS_KEY','')
         self.secret=os.environ.get('TEMU_S3_SECRET_KEY','')
         self.prefix=os.environ.get('TEMU_S3_PREFIX','temu-album/').strip('/')+'/'
-        if p.scheme!='https' or p.hostname!='kencana.basic.box.cloudeka.id' or port not in (None,443) or p.path or p.username or p.password or p.query or p.fragment or not all((self.access,self.secret,self.region)) or not re.fullmatch(r'[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]',self.bucket) or not re.fullmatch(r'[A-Za-z0-9_/-]+/',self.prefix) or '..' in self.prefix:
+        if p.scheme!='https' or p.hostname not in ('kencana.basic.box.cloudeka.id','s3.nevaobjects.id') or port not in (None,443) or p.path or p.username or p.password or p.query or p.fragment or not all((self.access,self.secret,self.region)) or not re.fullmatch(r'[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]',self.bucket) or not re.fullmatch(r'[A-Za-z0-9_/-]+/',self.prefix) or '..' in self.prefix:
             raise StorageError('Konfigurasi Object Storage belum lengkap.')
         self.host=p.netloc
     def key(self,kind,identifier,extension=''):
@@ -87,8 +87,11 @@ class S3Storage:
         else: digest.update(body);size=len(body)
         values={k.lower():str(v).strip() for k,v in (headers or {}).items()}
         values.update({'host':self.host,'x-amz-date':stamp,'x-amz-content-sha256':digest.hexdigest()})
-        if method in ('PUT','POST'): values['content-length']=str(size)
-        signed=';'.join(sorted(values));canonical_headers=''.join(k+':'+values[k]+'\n' for k in sorted(values));query=query_string(query)
+        # Empty POST length can be removed by an S3 gateway before signature verification.
+        if method in ('PUT','POST') and size: values['content-length']=str(size)
+        # Gateways may normalize Range; the signed path still authorizes the same object.
+        signed_names=sorted(k for k in values if k!='range')
+        signed=';'.join(signed_names);canonical_headers=''.join(k+':'+values[k]+'\n' for k in signed_names);query=query_string(query)
         canonical='\n'.join((method,self.uri(key),query,canonical_headers,signed,digest.hexdigest()))
         to_sign='AWS4-HMAC-SHA256\n'+stamp+'\n'+scope+'\n'+hashlib.sha256(canonical.encode()).hexdigest()
         signature=hmac.new(signing_key(self.secret,date,self.region),to_sign.encode(),'sha256').hexdigest()
@@ -136,9 +139,17 @@ class S3Storage:
                 if response is not None:response.close()
             finally:connection.close()
     def inspect(self,key):
-        headers,_=self.request('HEAD',key)
-        _,head=self.request('GET',key,headers={'Range':'bytes=0-31'},limit=32)
-        return int(headers.get('content-length','0')),headers.get('content-type','').split(';')[0],headers.get('etag',''),head
+        headers,head=self.request('GET',key,headers={'Range':'bytes=0-31'},limit=32)
+        try:
+            if value:=headers.get('content-range'):
+                match=re.fullmatch(r'bytes 0-(\d+)/(\d+)',value)
+                if not match:raise ValueError()
+                size=int(match[2])
+                if int(match[1])!=len(head)-1 or int(headers.get('content-length',str(len(head))))!=len(head):raise ValueError()
+            else:size=int(headers.get('content-length','0'))
+            if size<=0 or len(head)!=min(32,size):raise ValueError()
+        except ValueError:raise StorageError('Metadata Object Storage tidak sesuai.') from None
+        return size,headers.get('content-type','').split(';')[0],headers.get('etag',''),head
     def start_multipart(self,key,mime):
         _,data=self.request('POST',key,headers={'Content-Type':mime,'Cache-Control':'private, no-store'},query=[('uploads','')])
         try:

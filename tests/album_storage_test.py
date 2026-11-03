@@ -69,6 +69,16 @@ class UploadCases:
         self.assertEqual(self.store.files[final][0],PHOTO)
         status,headers,_=self.raw('/api/album/file/'+t['id']);self.assertEqual(status,307);self.assertIn('/media/',headers['Location'])
         self.assertEqual(self.request('/api/album/upload','PUT',PHOTO,mime='image/jpeg')[0],409)
+    def test_s3_head_returns_selected_object_metadata_without_redirect_or_body(self):
+        ticket=self.start();self.stage(ticket);self.finish_ticket(ticket)
+        status,headers,body=self.raw('/api/album/file/'+ticket['id'],'HEAD')
+        self.assertEqual(status,200);self.assertEqual(headers['Content-Type'],'image/jpeg');self.assertEqual(headers['Content-Length'],str(len(PHOTO)));self.assertNotIn('Location',headers);self.assertEqual(body,b'')
+        thumb=self.store.key('thumbnails',ticket['id'],'.jpg');self.store.files[thumb]=(PHOTO[:20],'image/jpeg')
+        with self.db_for_media.connect() as c:c.execute('UPDATE album_objects SET thumbnail_key=? WHERE id=?',(thumb,ticket['id']))
+        status,headers,body=self.raw('/api/album/file/'+ticket['id']+'?thumb=1','HEAD')
+        self.assertEqual(status,200);self.assertEqual(headers['Content-Length'],'20');self.assertEqual(body,b'');self.assertNotIn('Location',headers)
+        status,headers,body=self.raw('/api/album/file/'+ticket['id']+'?download=1','HEAD')
+        self.assertEqual(status,200);self.assertIn('attachment;',headers['Content-Disposition']);self.assertEqual(headers['Content-Length'],str(len(PHOTO)))
     def test_lightroom_style_survives_presigned_upload_and_video_style_is_rejected(self):
         self.join(self.config());body={'name':'Guest','caption':'','mime':'image/jpeg','size':len(PHOTO),'filter':'lr-fuji1'}
         status,_,raw=self.ticket(body);self.assertEqual(status,200);ticket=json.loads(raw);self.stage(ticket)
@@ -138,6 +148,32 @@ class SplitS3Tests(UploadCases,unittest.TestCase):
     def db_for_media(self):return self.albumdb
 
 class StorageContractTests(unittest.TestCase):
+    def test_inspect_uses_one_bounded_range_get_with_full_object_size(self):
+        for size,headers in ((1000,{'content-range':'bytes 0-31/1000','content-length':'32'}),(16,{'content-range':'bytes 0-15/16','content-length':'16'}),(1000,{'content-length':'1000'})):
+            with self.subTest(size=size,headers=headers),mock.patch.dict(os.environ,ENV):
+                store=album_storage.S3Storage();head=b'x'*min(32,size)
+                with mock.patch.object(store,'request',return_value=({**headers,'content-type':'image/jpeg; charset=binary','etag':'test-etag'},head)) as request:
+                    self.assertEqual(store.inspect('media/test.jpg'),(size,'image/jpeg','test-etag',head))
+                    request.assert_called_once_with('GET','media/test.jpg',headers={'Range':'bytes=0-31'},limit=32)
+    def test_inspect_rejects_malformed_or_inconsistent_range_metadata(self):
+        for headers in ({'content-range':'invalid','content-length':'32'},{'content-range':'bytes 1-32/1000'},{'content-range':'bytes 0-15/1000'},{'content-range':'bytes 0-31/12'},{'content-length':'invalid'},{}):
+            with self.subTest(headers=headers),mock.patch.dict(os.environ,ENV):
+                store=album_storage.S3Storage()
+                with mock.patch.object(store,'request',return_value=(headers,b'x'*32)),self.assertRaises(album_storage.StorageError):store.inspect('media/test.jpg')
+    def test_domainesia_presigned_upload_keeps_path_style_signature_and_multipart_parameters(self):
+        with mock.patch.dict(os.environ,{**ENV,'TEMU_S3_ENDPOINT':'https://s3.nevaobjects.id','TEMU_S3_REGION':'us-east-1'}):
+            store=album_storage.S3Storage();key=store.key('media','d'*32,'.jpg')
+            url=store.presign('PUT',key,mime='image/jpeg',size=300,query=[('uploadId','test-session'),('partNumber','1')])
+            parsed=urlsplit(url);query=parse_qs(parsed.query)
+            self.assertEqual(parsed.netloc,'s3.nevaobjects.id');self.assertEqual(parsed.path,'/test-wedding/'+key)
+            self.assertEqual(query['X-Amz-Algorithm'],['AWS4-HMAC-SHA256'])
+            self.assertEqual(query['X-Amz-Credential'][0].split('/')[2:4],['us-east-1','s3'])
+            self.assertEqual(query['X-Amz-SignedHeaders'],['content-length;content-type;host'])
+            self.assertEqual(query['uploadId'],['test-session']);self.assertEqual(query['partNumber'],['1'])
+            self.assertNotIn(ENV['TEMU_S3_SECRET_KEY'],url)
+    def test_domainesia_endpoint_rejects_http_credentials_ports_paths_and_lookalike_hosts(self):
+        for endpoint in ('http://s3.nevaobjects.id','https://s3.nevaobjects.id:8443','https://user:pass@s3.nevaobjects.id','https://s3.nevaobjects.id/bucket','https://s3.nevaobjects.id.evil.example','https://s3.nevaobjects.id?target=other','https://s3.nevaobjects.id#other'):
+            with self.subTest(endpoint=endpoint),mock.patch.dict(os.environ,{**ENV,'TEMU_S3_ENDPOINT':endpoint}),self.assertRaises(album_storage.StorageError):album_storage.S3Storage()
     def test_presigned_part_binds_upload_session_and_part_number(self):
         with mock.patch.dict(os.environ,ENV):
             url=album_storage.S3Storage().presign('PUT','media/test.jpg',mime='image/jpeg',size=300,query=[('uploadId','id/with+symbols'),('partNumber','1')])
@@ -168,6 +204,31 @@ class StorageContractTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(),PHOTO);self.assertEqual(store.files[store.key('media',item,'.jpg')][0],PHOTO)
 
 class StorageTransportTests(unittest.TestCase):
+    def test_range_is_sent_but_not_signed_so_gateways_can_normalize_it(self):
+        with mock.patch.dict(os.environ,ENV),mock.patch.object(album_storage.http.client,'HTTPSConnection') as factory:
+            connection=factory.return_value;connection.sock=None;response=connection.getresponse.return_value
+            response.status=206;response.getheaders.return_value=[('Content-Range','bytes 0-31/1000')];response.read.return_value=b'x'*32
+            album_storage.S3Storage().request('GET','media/test.jpg',headers={'Range':'bytes=0-31'},limit=32)
+            headers={call.args[0]:call.args[1] for call in connection.putheader.call_args_list}
+            self.assertEqual(headers['range'],'bytes=0-31');self.assertNotIn(';range',headers['authorization']);self.assertIn('SignedHeaders=host;x-amz-content-sha256;x-amz-date',headers['authorization'])
+    def test_empty_multipart_create_omits_content_length_but_signs_empty_payload_and_mime(self):
+        with mock.patch.dict(os.environ,ENV),mock.patch.object(album_storage.http.client,'HTTPSConnection') as factory:
+            connection=factory.return_value;connection.sock=None;response=connection.getresponse.return_value
+            response.status=200;response.getheaders.return_value=[];response.read.return_value=b'<InitiateMultipartUploadResult><UploadId>test-upload</UploadId></InitiateMultipartUploadResult>'
+            self.assertEqual(album_storage.S3Storage().start_multipart('media/test.jpg','image/jpeg'),'test-upload')
+            headers={call.args[0]:call.args[1] for call in connection.putheader.call_args_list}
+            self.assertNotIn('content-length',headers);self.assertNotIn('content-length',headers['authorization'])
+            self.assertIn('SignedHeaders=cache-control;content-type;host;x-amz-content-sha256;x-amz-date',headers['authorization'])
+            self.assertEqual(headers['x-amz-content-sha256'],hashlib.sha256(b'').hexdigest());self.assertEqual(headers['content-type'],'image/jpeg');connection.send.assert_not_called()
+    def test_nonempty_backend_upload_retains_signed_length_hash_and_exact_bytes(self):
+        for method in ('PUT','POST'):
+            with self.subTest(method=method),mock.patch.dict(os.environ,ENV),mock.patch.object(album_storage.http.client,'HTTPSConnection') as factory:
+                connection=factory.return_value;connection.sock=None;response=connection.getresponse.return_value
+                response.status=200;response.getheaders.return_value=[];response.read.return_value=b'ok'
+                album_storage.S3Storage().request(method,'media/test.jpg',PHOTO,{'Content-Type':'image/jpeg'})
+                headers={call.args[0]:call.args[1] for call in connection.putheader.call_args_list}
+                self.assertEqual(headers['content-length'],str(len(PHOTO)));self.assertIn('SignedHeaders=content-length;',headers['authorization'])
+                self.assertEqual(headers['x-amz-content-sha256'],hashlib.sha256(PHOTO).hexdigest());connection.send.assert_called_once_with(PHOTO)
     def test_three_originals_retry_second_reset_with_fresh_connections_and_identical_bytes(self):
         attempts={};saved={};connections=[];delays=[]
         class Handler(BaseHTTPRequestHandler):

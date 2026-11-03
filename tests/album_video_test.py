@@ -98,7 +98,10 @@ class S3VideoTests(unittest.TestCase):
                 h=mock.Mock();h.path='/api/album/file/'+item+'?preview=1';h.command='GET'
                 a.serve_file(h,item,{'mode':'live'});self.assertIn(preview,h.send_header.call_args_list[0].args[1])
                 h=mock.Mock();h.path='/api/album/file/'+item+'?preview=1&download=1';h.command='HEAD'
-                a.serve_file(h,item,{'mode':'live'});self.assertIn(original,h.send_header.call_args_list[0].args[1])
+                a.serve_file(h,item,{'mode':'live'});h.send_response.assert_called_once_with(200)
+                headers=dict(call.args for call in h.send_header.call_args_list);self.assertEqual(headers['Content-Length'],str(len(VIDEO)));self.assertEqual(headers['Content-Type'],'video/mp4');self.assertNotIn('Location',headers);h.wfile.write.assert_not_called()
+                h=mock.Mock();h.path='/api/album/file/'+item+'?preview=1';h.command='HEAD'
+                a.serve_file(h,item,{'mode':'live'});headers=dict(call.args for call in h.send_header.call_args_list);self.assertEqual(headers['Content-Length'],str(len(PREVIEW)));self.assertEqual(headers['Content-Type'],'video/mp4');self.assertNotIn('Location',headers)
                 a.remove(item);self.assertNotIn(original,store.files);self.assertNotIn(preview,store.files)
     def test_new_upload_reserves_room_for_video_preview_as_well_as_staging_and_original(self):
         with tempfile.TemporaryDirectory() as directory,mock.patch.dict(os.environ,album_storage_test.ENV):
