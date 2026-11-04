@@ -2,18 +2,24 @@
 import os, secrets, sqlite3, threading, time
 import album_storage
 
-ACTIVE_UPLOADS=12
-PENDING_UPLOADS=24
+ACTIVE_UPLOADS=32
+PENDING_UPLOADS=64
+VIDEO_ACTIVE_UPLOADS=8
+VIDEO_PENDING_UPLOADS=16
 STORAGE_BUDGET=int(float(os.environ.get('TEMU_ALBUM_STORAGE_BUDGET_GB','9'))*1024**3)
 JOB_LEASE=600
 
-def worker_count():
-    value=os.environ.get('TEMU_ALBUM_WORKERS','2')
-    if value not in ('1','2','3','4'):raise ValueError('TEMU_ALBUM_WORKERS harus berupa angka 1 sampai 4.')
+def worker_count(lane='photo'):
+    if lane not in ('photo','video'):raise ValueError('Jalur finalisasi tidak valid.')
+    name='TEMU_ALBUM_'+lane.upper()+'_WORKERS';maximum=2 if lane=='video' else 8
+    if lane=='photo' and name not in os.environ and 'TEMU_ALBUM_WORKERS' in os.environ:name='TEMU_ALBUM_WORKERS'
+    value=os.environ.get(name,'1' if lane=='video' else '6')
+    if value not in {str(n) for n in range(1,maximum+1)}:raise ValueError(name+' harus berupa angka 1 sampai '+str(maximum)+'.')
     return int(value)
 
 def initialize(album):
-    album.worker_count=worker_count();album.worker_slots=threading.BoundedSemaphore(album.worker_count)
+    album.worker_count=album.photo_worker_count=worker_count();album.video_worker_count=worker_count('video')
+    album.worker_slots=threading.BoundedSemaphore(album.photo_worker_count);album.video_worker_slots=threading.BoundedSemaphore(album.video_worker_count)
     album.worker_start_lock=threading.Lock();album.worker_threads=None;album.cleanup_lock=threading.Lock()
     with album.db.connect() as c:
         c.executescript('''CREATE TABLE IF NOT EXISTS album_jobs(id TEXT PRIMARY KEY,state TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,ready REAL NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '',claim TEXT NOT NULL DEFAULT '');
@@ -46,16 +52,19 @@ def enqueue(album,item,body,config):
         if added:c.execute('UPDATE album_uploads SET expires=? WHERE id=?',(int(time.time())+21600,item))
     return response(album,item)
 
-def process_next(album):
+def process_next(album,lane=None):
     """Claim one job atomically; slow storage I/O runs outside metadata locks."""
     from album import AlbumError, EXTENSIONS, valid_media, stamp
-    if not album.worker_slots.acquire(blocking=False):return False
+    if lane is None:return process_next(album,'photo') or process_next(album,'video')
+    if lane not in ('photo','video'):raise ValueError('Jalur finalisasi tidak valid.')
+    slots=album.video_worker_slots if lane=='video' else album.worker_slots
+    if not slots.acquire(blocking=False):return False
     item=None;published=False;target=None;multipart=None;claim=secrets.token_hex(16)
     try:
         with album.upload_lock,album.db.connect() as c:
             c.execute('BEGIN IMMEDIATE')
             c.execute("UPDATE album_jobs SET state='queued' WHERE state='running' AND ready<?",(time.time(),))
-            job=c.execute("SELECT j.id FROM album_jobs j JOIN album_uploads u ON j.id=u.id WHERE j.state='queued' AND j.ready<=? AND u.completed=0 AND u.expires>? ORDER BY j.rowid LIMIT 1",(time.time(),int(time.time()))).fetchone()
+            job=c.execute("SELECT j.id FROM album_jobs j JOIN album_uploads u ON j.id=u.id WHERE j.state='queued' AND j.ready<=? AND u.completed=0 AND u.expires>? AND u.mime LIKE ? ORDER BY j.rowid LIMIT 1",(time.time(),int(time.time()),'video/%' if lane=='video' else 'image/%')).fetchone()
             if not job:return False
             item=job[0];c.execute("UPDATE album_jobs SET state='running',attempts=attempts+1,ready=?,claim=? WHERE id=?",(time.time()+JOB_LEASE,claim,item))
             row=c.execute('SELECT name,caption,filter,mime,size FROM album_uploads WHERE id=?',(item,)).fetchone()
@@ -97,15 +106,15 @@ def process_next(album):
                 except (album_storage.StorageError,OSError):pass
         if item is None:raise
         return True
-    finally:album.worker_slots.release()
+    finally:slots.release()
 
 def start_workers(album,stop):
-    import album_video
-    album_video.start_worker(album,stop)
-    def finalize():
+    import album_video,album_photo
+    album_video.start_worker(album,stop);album_photo.start_worker(album,stop)
+    def finalize(lane):
         while not stop.is_set():
             try:
-                if not album_storage.enabled() or not process_next(album):stop.wait(1)
+                if not album_storage.enabled() or not process_next(album,lane):stop.wait(.25)
             except (album_storage.StorageError,OSError,sqlite3.Error,ValueError):
                 # A temporary DB/disk failure must not kill or spin the worker.
                 stop.wait(5)
@@ -116,7 +125,7 @@ def start_workers(album,stop):
                 except (album_storage.StorageError,OSError,sqlite3.Error):pass
     with album.worker_start_lock:
         if album.worker_threads is not None:return album.worker_threads
-        workers=[threading.Thread(target=finalize,name='temu-album-finalize-'+str(n+1),daemon=True) for n in range(album.worker_count)]
+        workers=[threading.Thread(target=finalize,args=(lane,),name='temu-album-finalize-'+lane+'-'+str(n+1),daemon=True) for lane,count in (('photo',album.photo_worker_count),('video',album.video_worker_count)) for n in range(count)]
         workers.append(threading.Thread(target=cleanup,name='temu-album-cleanup',daemon=True))
         album.worker_threads=tuple(workers)
         for worker in workers:worker.start()

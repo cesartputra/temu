@@ -77,7 +77,7 @@ class Album:
                 raise
         self.db.backup(force=True);return {'ok':True,'imported':len(rows)}
     def __init__(self,db):
-        self.db=db;self.upload_lock=threading.Lock();self.thumbnail_slots=threading.BoundedSemaphore(2);self.relay_slots=threading.BoundedSemaphore(2);self.directory=db.directory/'album-media';self.directory.mkdir(mode=0o700,exist_ok=True)
+        self.db=db;self.upload_lock=threading.Lock();self.storage_lock=threading.Lock();self._storage=None;self.thumbnail_slots=threading.BoundedSemaphore(2);self.relay_slots=threading.BoundedSemaphore(2);self.directory=db.directory/'album-media';self.directory.mkdir(mode=0o700,exist_ok=True)
         with db.connect() as c:
             c.executescript('''CREATE TABLE IF NOT EXISTS album_settings(id INTEGER PRIMARY KEY CHECK(id=1),config TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS album_items(id TEXT PRIMARY KEY,name TEXT NOT NULL,caption TEXT NOT NULL,filter TEXT NOT NULL,mime TEXT NOT NULL,size INTEGER NOT NULL,created TEXT NOT NULL,hidden INTEGER NOT NULL DEFAULT 0);
@@ -132,7 +132,9 @@ class Album:
         return body
     def storage(self):
         if not album_storage.enabled():raise AlbumError('Unggahan langsung belum diaktifkan.',409)
-        return album_storage.S3Storage()
+        with self.storage_lock:
+            if self._storage is None:self._storage=album_storage.S3Storage()
+            return self._storage
     def clean_uploads(self,store):
         if not self.cleanup_lock.acquire(blocking=False):return
         try:
@@ -188,6 +190,10 @@ class Album:
                 pending=c.execute('SELECT count(*) FROM album_uploads WHERE completed=0').fetchone()[0]
                 active=c.execute("SELECT count(*) FROM album_uploads u LEFT JOIN album_jobs j ON u.id=j.id WHERE u.completed=0 AND j.id IS NULL").fetchone()[0]
                 if pending>=album_jobs.PENDING_UPLOADS or active>=album_jobs.ACTIVE_UPLOADS:raise AlbumError('Menunggu giliran unggah. Foto atau videomu tetap siap.',429)
+                if mime.startswith('video/'):
+                    video_pending=c.execute("SELECT count(*) FROM album_uploads WHERE completed=0 AND mime LIKE 'video/%'").fetchone()[0]
+                    video_active=c.execute("SELECT count(*) FROM album_uploads u LEFT JOIN album_jobs j ON u.id=j.id WHERE u.completed=0 AND j.id IS NULL AND u.mime LIKE 'video/%'").fetchone()[0]
+                    if video_pending>=album_jobs.VIDEO_PENDING_UPLOADS or video_active>=album_jobs.VIDEO_ACTIVE_UPLOADS:raise AlbumError('Jalur video sedang sibuk. Foto tetap dapat diunggah.',429)
                 item=secrets.token_hex(16);token=secrets.token_urlsafe(32);remaining=600
                 c.execute('INSERT INTO album_uploads VALUES(?,?,?,?,?,?,?,?,0)',(item,token,name.strip(),caption.strip(),preset,mime,size,int(time.time())+900))
                 c.execute('INSERT INTO album_requests VALUES(?,?)',(request_id,item))
@@ -240,7 +246,8 @@ class Album:
         if not session or not session[0]:raise AlbumError('Tiket unggahan belum siap.',409)
         if not self.relay_slots.acquire(blocking=False):raise AlbumError('Jalur cadangan sedang sibuk. File tetap tersimpan di HP.',429)
         try:
-            with album_storage.temporary_space(row[5],self.directory),tempfile.TemporaryDirectory(dir=self.directory,prefix='.relay-') as directory:
+            import album_staging
+            with album_staging.directory(row[5],prefix='.relay-') as directory:
                 path=Path(directory)/'part';remaining=row[5];deadline=time.monotonic()+90
                 with path.open('wb') as f:
                     while remaining:
@@ -388,7 +395,8 @@ class Album:
             download='momen-'+item[:8]+ext if query.get('download')==['1'] else None
             store=self.storage()
             if h.command=='HEAD':
-                size,mime,_,_=store.inspect(key)
+                if preview:size,mime=preview[1],'video/mp4'
+                elif key!=obj[0]:size,mime,_,_=store.inspect(key)
                 h.send_response(200);h.send_header('Content-Type',mime);h.send_header('Content-Length',str(size));h.send_header('Cache-Control','private, no-store');h.send_header('Cross-Origin-Resource-Policy','same-origin')
                 if download:h.send_header('Content-Disposition','attachment; filename="'+download+'"')
                 h.end_headers();return

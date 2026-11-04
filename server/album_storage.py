@@ -4,14 +4,63 @@ No credentials or signed URLs are written to logs. New uploads use a single
 multipart part; completing it invalidates the guest's PUT URL. Legacy staging
 uploads are copied to final keys for compatibility with older browser queues.
 """
-import base64, hashlib, hmac, http.client, os, re, ssl, tempfile, shutil, threading, time
+import atexit, base64, hashlib, hmac, http.client, os, random, re, socket, ssl, tempfile, shutil, threading, time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 from xml.etree import ElementTree as ET
+import album_staging
 
 class StorageError(Exception): pass
+class _TransientStorageError(StorageError): pass
+
+_connection_pools={}
+_connection_pool_lock=threading.Lock()
+
+class _ConnectionPool:
+    def __init__(self,host):
+        self.host=host;self._slots=threading.BoundedSemaphore(32);self._lock=threading.Lock();self._idle=[]
+        self._context=ssl.create_default_context()
+    def acquire(self,deadline):
+        remaining=deadline-time.monotonic()
+        if remaining<=0 or not self._slots.acquire(timeout=min(10,remaining)):
+            raise StorageError('Koneksi Object Storage sedang sibuk. Silakan coba lagi.')
+        try:
+            now=time.monotonic()
+            with self._lock:
+                while self._idle:
+                    connection,returned=self._idle.pop()
+                    if now-returned<30 and connection.sock is not None:return connection
+                    connection.close()
+            return http.client.HTTPSConnection(self.host,timeout=min(10,remaining),context=self._context)
+        except BaseException as error:
+            self._slots.release()
+            if isinstance(error,(OSError,http.client.HTTPException)):
+                raise StorageError('Koneksi Object Storage belum berhasil. Silakan coba lagi.') from error
+            raise
+    def release(self,connection,reusable):
+        try:
+            if reusable and connection.sock is not None:
+                with self._lock:self._idle.append((connection,time.monotonic()))
+            else:connection.close()
+        finally:self._slots.release()
+
+def _connection_pool(host):
+    with _connection_pool_lock:
+        if host not in _connection_pools:_connection_pools[host]=_ConnectionPool(host)
+        return _connection_pools[host]
+
+def _close_idle_connections():
+    with _connection_pool_lock:
+        for pool in _connection_pools.values():
+            with pool._lock:
+                for connection,_ in pool._idle:
+                    try:connection.close()
+                    except OSError:pass
+                pool._idle.clear()
+
+atexit.register(_close_idle_connections)
 
 _temporary_lock=threading.Lock()
 _temporary_reserved=0
@@ -51,6 +100,7 @@ class S3Storage:
         if p.scheme!='https' or p.hostname not in ('kencana.basic.box.cloudeka.id','s3.nevaobjects.id') or port not in (None,443) or p.path or p.username or p.password or p.query or p.fragment or not all((self.access,self.secret,self.region)) or not re.fullmatch(r'[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]',self.bucket) or not re.fullmatch(r'[A-Za-z0-9_/-]+/',self.prefix) or '..' in self.prefix:
             raise StorageError('Konfigurasi Object Storage belum lengkap.')
         self.host=p.netloc
+        self._pool=_connection_pool(self.host)
     def key(self,kind,identifier,extension=''):
         if kind not in ('incoming','media','thumbnails','previews') or not re.fullmatch(r'[a-f0-9]{32}',identifier) or not re.fullmatch(r'\.[a-z0-9]+|',extension): raise StorageError('Kunci objek tidak valid.')
         return self.prefix+kind+'/'+identifier+extension
@@ -74,8 +124,8 @@ class S3Storage:
             try:return self._request(method,key,body,headers,query,limit,output,expected,deadline)
             except StorageError as error:
                 # Creating/completing multipart sessions is recovered by its caller, not replayed blindly.
-                if method not in ('GET','HEAD','PUT','DELETE') or not isinstance(error.__cause__,(ConnectionError,TimeoutError,http.client.HTTPException)) or attempt==2:raise
-                delay=.5*2**attempt
+                if method not in ('GET','HEAD','PUT','DELETE') or not (isinstance(error,_TransientStorageError) or isinstance(error.__cause__,(ConnectionError,TimeoutError,http.client.HTTPException))) or attempt==2:raise
+                delay=.5*2**attempt+random.uniform(0,.25)
                 if time.monotonic()+delay>=deadline:raise
             time.sleep(delay)
     def _request(self,method,key,body,headers,query,limit,output,expected,deadline):
@@ -98,12 +148,21 @@ class S3Storage:
         values['authorization']='AWS4-HMAC-SHA256 Credential='+self.access+'/'+scope+', SignedHeaders='+signed+', Signature='+signature
         remaining=deadline-time.monotonic()
         if remaining<=0:raise StorageError('Transfer Object Storage terlalu lama. Silakan coba lagi.')
-        connection=http.client.HTTPSConnection(self.host,timeout=min(20,remaining),context=ssl.create_default_context());response=None
+        connection=self._pool.acquire(deadline);response=None;reusable=False
         def transfer_budget():
             seconds=deadline-time.monotonic()
             if seconds<=0:raise StorageError('Transfer Object Storage terlalu lama. Silakan coba lagi.')
-            if connection.sock:connection.sock.settimeout(min(20,seconds))
+            if connection.sock:connection.sock.settimeout(min(60,seconds))
+            return seconds
+        def read_chunk(amount):
+            transfer_budget();chunk=response.read1(amount);transfer_budget()
+            if not chunk and isinstance(response.length,int) and response.length>0:raise http.client.IncompleteRead(b'',response.length)
+            return chunk
         try:
+            if connection.sock is None:
+                connection.timeout=min(10,transfer_budget());connection.connect()
+                if connection.sock:connection.sock.setsockopt(socket.SOL_SOCKET,socket.SO_KEEPALIVE,1)
+            transfer_budget()
             connection.putrequest(method,self.uri(key)+('?' + query if query else ''),skip_host=True,skip_accept_encoding=True)
             for k,v in values.items(): connection.putheader(k,v)
             connection.endheaders()
@@ -111,33 +170,40 @@ class S3Storage:
                 with body.open('rb') as f:
                     for chunk in iter(lambda:f.read(65536),b''):transfer_budget();connection.send(chunk)
             elif body: connection.send(body)
-            response=connection.getresponse();result={k.lower():v for k,v in response.getheaders()}
-            data=response.read(limit) if output is None or not 200<=response.status<300 else b''
+            transfer_budget();response=connection.getresponse();result={k.lower():v for k,v in response.getheaders()}
+            transfer_budget()
+            data=b''
+            if output is None or not 200<=response.status<300:
+                chunks=[];remaining=limit
+                while remaining:
+                    chunk=read_chunk(min(65536,remaining))
+                    if not chunk:break
+                    chunks.append(chunk);remaining-=len(chunk)
+                data=b''.join(chunks)
             if not 200<=response.status<300:
                 code='Unavailable'
                 try: code=ET.fromstring(data).findtext('Code') or code
                 except ET.ParseError: pass
                 if not re.fullmatch(r'[A-Za-z0-9]{1,64}',code): code='Unavailable'
-                raise StorageError('Object Storage belum dapat diakses ('+code+').')
+                error=_TransientStorageError if response.status in (429,500,502,503,504) else StorageError
+                raise error('Object Storage belum dapat diakses ('+code+').')
             if output is not None:
                 length=result.get('content-length')
                 if not isinstance(expected,int) or not 12<=expected<=100*1024*1024 or (length is not None and length!=str(expected)):raise StorageError('Ukuran salinan Object Storage tidak sesuai.')
                 with Path(output).open('wb') as f:
                     remaining=expected
                     while remaining:
-                        remaining_time=deadline-time.monotonic()
-                        if remaining_time<=0:raise StorageError('Transfer Object Storage terlalu lama. Silakan coba lagi.')
-                        if connection.sock:connection.sock.settimeout(min(20,remaining_time))
-                        chunk=response.read(min(65536,remaining))
+                        chunk=read_chunk(min(65536,remaining))
                         if not chunk:raise http.client.IncompleteRead(b'',remaining)
                         f.write(chunk);remaining-=len(chunk)
-                    if response.read(1):raise StorageError('Ukuran salinan Object Storage tidak sesuai.')
+                    if read_chunk(1):raise StorageError('Ukuran salinan Object Storage tidak sesuai.')
+            reusable=response.isclosed() and not response.will_close
             return result,data
         except (OSError,http.client.HTTPException) as error: raise StorageError('Koneksi Object Storage belum berhasil. Silakan coba lagi.') from error
         finally:
             try:
                 if response is not None:response.close()
-            finally:connection.close()
+            finally:self._pool.release(connection,reusable)
     def inspect(self,key):
         headers,head=self.request('GET',key,headers={'Range':'bytes=0-31'},limit=32)
         try:
@@ -197,8 +263,8 @@ class S3Storage:
             except StorageError as error:
                 if '(RegionNotAvailable)' not in str(error):raise
                 type(self).copy_unavailable=True
-        # Each worker streams one file; shared reservations protect disk space.
-        with temporary_space(size),tempfile.TemporaryDirectory(prefix='temu-s3-copy-') as directory:
+        # Each worker streams one file; shared reservations bound RAM or disk use.
+        with album_staging.directory(size,prefix='temu-s3-copy-') as directory:
             path=Path(directory)/'media'
             self.request('GET',source,headers={'If-Match':etag},output=path,expected=size)
             digest=hashlib.md5()

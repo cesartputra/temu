@@ -46,10 +46,10 @@ def main():
     token=os.environ.get('TEMU_SERVER_TOKEN','');proxy=os.environ.get('TEMU_ALBUM_PROXY_KEY','')
     if min(len(token),len(proxy))<32:raise SystemExit('Isi TEMU_SERVER_TOKEN dan TEMU_ALBUM_PROXY_KEY, minimal 32 karakter.')
     os.umask(0o077);db=AlbumDatabase(args.data_dir,os.environ.get('TEMU_GUESTBOOK_URL',''),token,args.backup_dir)
-    server=BoundedHTTPServer((args.host,args.port),make_album_handler(db,token,proxy),max_workers=16);stop=threading.Event()
+    server=BoundedHTTPServer((args.host,args.port),make_album_handler(db,token,proxy),max_workers=32);stop=threading.Event()
     def backup_loop():
         while not stop.wait(300):db.backup(force=True)
-    threading.Thread(target=backup_loop,daemon=True).start();print('Album server ready; finalization workers:',server.RequestHandlerClass.album.worker_count,flush=True)
+    threading.Thread(target=backup_loop,daemon=True).start();print('Album server ready; photo/video finalization workers:',server.RequestHandlerClass.album.photo_worker_count,server.RequestHandlerClass.album.video_worker_count,flush=True)
     album_jobs.start_workers(server.RequestHandlerClass.album,stop)
     try:server.serve_forever()
     except KeyboardInterrupt:pass

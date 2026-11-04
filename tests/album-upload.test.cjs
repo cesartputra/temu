@@ -14,9 +14,21 @@ test('three completions survive a reset on photo two without duplicating complet
  assert.equal(calls.filter(path=>path.endsWith('/complete')).length,3);
  assert.equal(calls.filter(path=>path==='uploads/second/status').length,2);assert.ok(delays.some(ms=>Math.abs(ms-1650)<.01));
 });
-test('180 simultaneous clients retry with different backoff without losing their operation',async()=>{
- const delays=[],results=await Promise.all(Array.from({length:180},(_,id)=>{let attempts=0;return transport.retry(async()=>{if(!attempts++){const e=Error('busy');e.status=429;e.retryAfter=6;throw e;}return id;},{random:()=>id/180,wait:async ms=>delays.push(ms)});}));
- assert.equal(results.length,180);assert.equal(new Set(results).size,180);assert.equal(new Set(delays).size,180);assert.ok(Math.min(...delays)>=6000);assert.ok(Math.max(...delays)<=7200);
+test('300 simultaneous clients retry with different backoff without losing their operation',async()=>{
+ const delays=[],results=await Promise.all(Array.from({length:300},(_,id)=>{let attempts=0;return transport.retry(async()=>{if(!attempts++){const e=Error('busy');e.status=429;e.retryAfter=6;throw e;}return id;},{random:()=>id/300,wait:async ms=>delays.push(ms)});}));
+ assert.equal(results.length,300);assert.equal(new Set(results).size,300);assert.equal(new Set(delays).size,300);assert.ok(Math.min(...delays)>=6000);assert.ok(Math.max(...delays)<=7200);
+});
+test('fast publication is noticed after one second while long processing polls back off',async()=>{
+ const waits=[];let polls=0;
+ const result=await transport.settled({id:'photo',token:'token'},async()=>++polls<7?{pending:true,retryAfter:6}:{id:'photo'},{random:()=>.5,wait:async ms=>waits.push(ms)});
+ assert.equal(result.id,'photo');assert.deepEqual(waits,[1000,2000,4000,6000,6000,6000]);
+});
+test('temporary internal errors retry without replaying the completed upload',async()=>{
+ let calls=0;const paths=[],waits=[];
+ const result=await transport.settled({id:'existing',token:'token',pending:true},async path=>{
+  paths.push(path);if(calls++===0)throw Object.assign(Error('temporary S3 gateway error'),{status:500});return {id:'existing'};
+ },{random:()=>0,wait:async ms=>waits.push(ms)});
+ assert.equal(result.id,'existing');assert.deepEqual(paths,['uploads/existing/status','uploads/existing/status']);assert.deepEqual(waits,[1500]);
 });
 test('read retries stop at their budget and do not retry permission errors',async()=>{
  let elapsed=0,calls=0;

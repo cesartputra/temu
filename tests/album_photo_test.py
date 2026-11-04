@@ -26,16 +26,30 @@ class PhotoJobsTests(unittest.TestCase):
   with self.db.connect() as c:thumb=c.execute('SELECT thumbnail_key FROM album_objects WHERE id=?',(item,)).fetchone()[0]
   self.assertEqual(self.store.files[key][0],PHOTO);self.assertEqual(self.store.files[thumb][0],THUMB);self.assertFalse(album_photo.process_next(self.a));self.assertEqual(list(self.a.directory.iterdir()),[])
   self.assertFalse(self.a.list_items(None,admin=True)['items'][0]['thumbnailPending'])
- def test_video_and_photo_share_one_encoder_slot_and_original_requests_keep_working(self):
+ def test_busy_video_encoder_does_not_block_photo_and_photo_work_stays_serial(self):
   self.add();self.a.video_slot.acquire()
-  try:self.assertFalse(album_photo.process_next(self.a))
+  try:
+   with mock.patch.object(album_photo,'thumbnail',side_effect=encoded):self.assertTrue(album_photo.process_next(self.a))
   finally:self.a.video_slot.release()
+  self.add('b'*32)
   entered=threading.Event();release=threading.Event()
   def slow(*args):entered.set();release.wait(3);return encoded(*args)
   with mock.patch.object(album_photo,'thumbnail',side_effect=slow):
    thread=threading.Thread(target=lambda:album_photo.process_next(self.a));thread.start()
    try:self.assertTrue(entered.wait(2));self.assertFalse(album_photo.process_next(album.Album(self.db)));self.assertFalse(album_video.process_next(self.a))
    finally:release.set();thread.join(3)
+ def test_photo_worker_starts_once_and_stops_independently_of_video(self):
+  stop=threading.Event();processed=threading.Event();self.a.video_slot.acquire()
+  self.add()
+  def thumb(*args):encoded(*args);processed.set()
+  try:
+   with mock.patch.object(album_photo,'thumbnail',side_effect=thumb),mock.patch.object(album_photo.shutil,'which',return_value='/fake/ffmpeg'):
+    thread=album_photo.start_worker(self.a,stop)
+    self.assertIs(album_photo.start_worker(self.a,stop),thread);self.assertTrue(processed.wait(2))
+  finally:
+   stop.set();self.a.video_slot.release()
+   if self.a.photo_thread:self.a.photo_thread.join(3)
+  self.assertFalse(self.a.photo_thread.is_alive())
  def test_failed_decode_retains_original_and_other_photos_can_finish(self):
   first,key=self.add();second,_=self.add('b'*32)
   def fail_one(source,target,preset,stop):

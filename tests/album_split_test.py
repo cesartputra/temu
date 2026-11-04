@@ -42,15 +42,26 @@ class SplitAlbumTests(unittest.TestCase):
   self.assertEqual(self.request('/api/album/info')[0],503);self.assertEqual(self.request('/')[0],200);self.assertEqual(self.request('/api/events',admin=True)[0],200)
  def test_gateway_busy_and_upstream_retry_headers_are_preserved(self):
   proxy=self.http.RequestHandlerClass.album
-  self.assertTrue(all(proxy.slots.acquire(False) for _ in range(4)))
+  held=0
+  while proxy.slots.acquire(False):held+=1
   try:
    status,headers,raw=self.request('/api/album/info');self.assertEqual(status,503)
    self.assertEqual(headers['Retry-After'],'2');self.assertEqual(json.loads(raw)['retryAfter'],2)
    self.assertEqual(self.request('/api/events',admin=True)[0],200)
   finally:
-   for _ in range(4):proxy.slots.release()
+   for _ in range(held):proxy.slots.release()
   with mock.patch.object(self.albumhttp.RequestHandlerClass.album,'session',side_effect=album.AlbumError('busy',429)):
    status,headers,raw=self.request('/api/album/info');self.assertEqual(status,429);self.assertEqual(headers['Retry-After'],'6')
+ def test_metadata_remains_available_with_eight_other_album_calls_in_flight(self):
+  self.join(self.config());proxy=self.http.RequestHandlerClass.album;held=0
+  try:
+   for _ in range(8):
+    if proxy.slots.acquire(False):held+=1
+   self.assertEqual(held,8)
+   self.assertEqual(self.request('/api/album/info')[0],200)
+   self.assertEqual(self.request('/api/events',admin=True)[0],200)
+  finally:
+   for _ in range(held):proxy.slots.release()
  def test_gateway_required_even_with_shared_admin_token(self):
   source=self.origin;self.origin='http://127.0.0.1:'+str(self.albumhttp.server_port)
   try:

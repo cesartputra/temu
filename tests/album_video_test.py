@@ -108,7 +108,7 @@ class S3VideoTests(unittest.TestCase):
             a=album.Album(album_test.server.Database(directory));body=json.dumps({'name':'Guest','mime':'video/mp4','size':1024*1024}).encode()
             import io,album_jobs
             h=type('Request',(),{'headers':{'Content-Length':str(len(body))},'rfile':io.BytesIO(body)})()
-            with mock.patch.object(album_jobs,'STORAGE_BUDGET',2*1024*1024+24*512*1024),self.assertRaises(album.AlbumError) as error:
+            with mock.patch.object(album_jobs,'STORAGE_BUDGET',2*1024*1024+64*512*1024),self.assertRaises(album.AlbumError) as error:
                 a.begin_upload(h,{'uploadsOpen':True})
             self.assertEqual(error.exception.status,429)
 
@@ -140,7 +140,7 @@ class EncoderTests(unittest.TestCase):
             probe=json.dumps({'streams':[{'width':3840,'height':2160,'color_transfer':'smpte2084'}],'format':{'duration':'10'}}).encode();calls=[]
             def command(args,*unused):calls.append(args);return probe
             with mock.patch.object(album_video,'run',side_effect=command):self.assertTrue(album_video.compress(source,target,threading.Event()))
-            args=calls[1];self.assertEqual(args[args.index('-threads')+1],'1');self.assertEqual(args[args.index('-protocol_whitelist')+1],'file,pipe')
+            args=calls[1];self.assertEqual([args[i+1] for i,value in enumerate(args) if value=='-threads'],['2','2']);self.assertEqual(args[args.index('-protocol_whitelist')+1],'file,pipe')
             self.assertIn('tonemap=hable',args[args.index('-vf')+1]);self.assertIn('+faststart',args);self.assertIn(str(album_video.MAX_PREVIEW),args)
     def test_truncated_or_oversized_metadata_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -12,7 +12,7 @@ class AlbumProxy:
     def __init__(self,url,key,token):
         self.host,self.port=internal_target(url)
         if len(key)<32:raise ValueError('TEMU_ALBUM_PROXY_KEY minimal 32 karakter.')
-        self.key=key;self.token=token;self.slots=threading.BoundedSemaphore(4);self.relay_slots=threading.BoundedSemaphore(2)
+        self.key=key;self.token=token;self.slots=threading.BoundedSemaphore(16);self.relay_slots=threading.BoundedSemaphore(2)
     def config(self):
         connection=http.client.HTTPConnection(self.host,self.port,timeout=3)
         try:

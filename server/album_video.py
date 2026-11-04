@@ -1,7 +1,7 @@
 """One durable, low-priority video preview job at a time; originals never change."""
 import json, math, os, secrets, shutil, signal, sqlite3, subprocess, tempfile, threading, time
 from pathlib import Path
-import album_storage
+import album_storage,album_staging
 
 MAX_PREVIEW=100*1024*1024
 LEASE=1200
@@ -77,10 +77,10 @@ def compress(source,target,stop):
     filters+=",format=yuv420p,fps=fps='min(source_fps,30)'"
     color=['-color_primaries','bt709','-color_trc','bt709','-colorspace','bt709','-color_range','tv',
         '-x264-params','colorprim=bt709:transfer=bt709:colormatrix=bt709'] if hdr else []
-    run(['ffmpeg','-nostdin','-hide_banner','-v','error','-y','-max_alloc','67108864','-threads','1','-filter_threads','1',
+    run(['ffmpeg','-nostdin','-hide_banner','-v','error','-y','-max_alloc','67108864','-threads','2','-filter_threads','1',
         '-protocol_whitelist','file,pipe','-format_whitelist','mov,matroska,webm','-i',str(source),
         '-map','0:v:0','-map','0:a:0?','-map_metadata','-1','-map_chapters','-1','-vf',filters,
-        '-c:v','libx264','-preset','veryfast','-crf','22','-maxrate','6M','-bufsize','12M','-threads','1',
+        '-c:v','libx264','-preset','veryfast','-crf','22','-maxrate','6M','-bufsize','12M','-threads','2',
         '-c:a','aac','-b:a','128k','-ac','2','-movflags','+faststart','-fs',str(MAX_PREVIEW),*color,str(target)],600,stop)
     _,result_duration=probe(target,stop)
     if abs(duration-result_duration)>max(.25,duration*.01):raise VideoError('Video preview is incomplete.')
@@ -112,7 +112,7 @@ def process_next(album,stop=None):
             else:(album.directory/stale).unlink(missing_ok=True)
             with album.db.connect() as c:c.execute('UPDATE album_video_jobs SET object_key=NULL WHERE id=? AND claim=?',(item,claim))
         local=album.directory if not original else None
-        with album_storage.temporary_space(MAX_PREVIEW+(size if original else 0),local),tempfile.TemporaryDirectory(prefix='.video-',dir=local) as directory:
+        with album_staging.directory(MAX_PREVIEW+(size if original else 0),'.video-',fallback=local) as directory:
             folder=Path(directory);source=album.directory/(item+EXTENSIONS[mime]);preview=folder/'preview.mp4'
             if original:
                 source=folder/('original'+EXTENSIONS[mime]);actual,content,etag,_=store.inspect(original)
@@ -167,16 +167,14 @@ def start_worker(album,stop):
         if album.video_thread is not None:return album.video_thread
         if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
             print('Video preview worker unavailable: install ffmpeg and ffprobe; originals retained.',flush=True);return None
-        for directory in (*album.directory.glob('.video-*'),*album.directory.glob('.photo-*')):
+        for directory in album.directory.glob('.video-*'):
             try:
                 if directory.is_dir() and directory.stat().st_mtime<time.time()-LEASE:shutil.rmtree(directory)
             except OSError:pass
         def work():
-            import album_photo
             while not stop.is_set():
                 try:
-                    photo=album_photo.process_next(album,stop)
-                    if not process_next(album,stop) and not photo:stop.wait(3)
+                    if not process_next(album,stop):stop.wait(3)
                 except (sqlite3.Error,OSError):
                     # A temporary database fault must not stop future previews.
                     print('Video preview worker paused; originals retained.',flush=True);stop.wait(10)

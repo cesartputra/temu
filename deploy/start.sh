@@ -4,6 +4,7 @@ set -eu
 if [ "${TEMU_SERVICE_ROLE:-guestbook}" = "album" ]; then
   : "${TEMU_ALBUM_PROXY_KEY:?Isi kunci internal album}"
   : "${TEMU_GUESTBOOK_URL:?Isi hostname internal buku tamu}"
+  export MALLOC_ARENA_MAX="${MALLOC_ARENA_MAX:-2}" OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
   exec python3 server/album_server.py --host 0.0.0.0 --port "${PORT:-8080}" --data-dir /data --backup-dir /data/backups
 fi
 : "${TEMU_ALLOWED_HOSTS:?Isi TEMU_ALLOWED_HOSTS dengan hostname HTTPS publik}"

@@ -1,7 +1,7 @@
-"""Durable photo thumbnails; shares the single encoder slot with video previews."""
-import json,os,re,secrets,sqlite3,tempfile,threading,time
+"""Durable photo thumbnails with one encoder independent of video previews."""
+import json,os,re,secrets,shutil,sqlite3,threading,time
 from pathlib import Path
-import album_storage,album_video
+import album_storage,album_video,album_staging
 
 LEASE=600
 PRESETS=Path(__file__).resolve().parents[1]/'dist/album-presets'
@@ -10,6 +10,7 @@ CATALOG={p['id']:p for p in json.loads((PRESETS/'catalog.json').read_text())['pr
 class PhotoError(Exception):pass
 
 def initialize(album):
+    album.photo_slot=threading.Lock();album.photo_start_lock=threading.Lock();album.photo_thread=None
     with album.db.connect() as c:
         c.execute('''CREATE TABLE IF NOT EXISTS album_photo_jobs(
             id TEXT PRIMARY KEY,state TEXT NOT NULL,claim TEXT NOT NULL,ready REAL NOT NULL,
@@ -65,7 +66,7 @@ def thumbnail(source,target,preset,stop):
 def process_next(album,stop=None):
     from album import AlbumError,EXTENSIONS
     stop=stop or threading.Event()
-    if stop.is_set() or not album.video_slot.acquire(blocking=False):return False
+    if stop.is_set() or not album.photo_slot.acquire(blocking=False):return False
     item=None;target=None;store=None;published=False;claim=secrets.token_hex(16)
     try:
         with album.upload_lock,album.db.connect() as c:
@@ -83,7 +84,7 @@ def process_next(album,stop=None):
         if existing or not original and (album.directory/(item+'.thumb.jpg')).is_file():
             with album.db.connect() as c:c.execute("UPDATE album_photo_jobs SET state='done',ready=0,object_key=NULL WHERE id=? AND claim=?",(item,claim))
             return True
-        with album_storage.temporary_space(size+3*1024*1024,album.directory),tempfile.TemporaryDirectory(dir=album.directory,prefix='.photo-') as directory:
+        with album_staging.directory(size+3*1024*1024,'.photo-',fallback=None if original else album.directory) as directory:
             folder=Path(directory);source=album.directory/(item+EXTENSIONS[mime]);preview=folder/'thumbnail.jpg'
             if original:
                 source=folder/('original'+EXTENSIONS[mime]);store.request('GET',original,output=source,expected=size)
@@ -116,4 +117,23 @@ def process_next(album,stop=None):
         if target and not published:
             try:store.delete(target)
             except (album_storage.StorageError,OSError):pass
-        album.video_slot.release()
+        album.photo_slot.release()
+
+def start_worker(album,stop):
+    with album.photo_start_lock:
+        if album.photo_thread is not None:return album.photo_thread
+        if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
+            print('Photo thumbnail worker unavailable: install ffmpeg and ffprobe; originals retained.',flush=True);return None
+        for directory in album.directory.glob('.photo-*'):
+            try:
+                if directory.is_dir() and directory.stat().st_mtime<time.time()-LEASE:shutil.rmtree(directory)
+            except OSError:pass
+        def work():
+            while not stop.is_set():
+                try:
+                    if not process_next(album,stop):stop.wait(1)
+                except (sqlite3.Error,OSError):
+                    print('Photo thumbnail worker paused; originals retained.',flush=True);stop.wait(10)
+        album.photo_thread=threading.Thread(target=work,name='temu-album-photo',daemon=True);album.photo_thread.start()
+        print('Photo thumbnail worker ready; concurrency: 1; originals retained.',flush=True)
+        return album.photo_thread

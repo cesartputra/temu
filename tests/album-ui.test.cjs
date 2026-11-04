@@ -103,6 +103,10 @@ test('queue shows waiting versus transfer phases and exposes retry for active mo
  h.run('renderQueue([{id:"one",name:"Guest",state:"uploading",phase:"waiting"}])');assert.match(h.nodes['#queue-items'].innerHTML,/Menunggu server/);
  h.run('renderQueue([{id:"one",name:"Guest",state:"uploading",phase:"uploading",progress:42}])');assert.match(h.nodes['#queue-items'].innerHTML,/Mengunggah 42%/);
 });
+test('parallel progress identifies photo and video jobs while capture stays available',async()=>{
+ const h=harness();await tick();h.queueOptions.onChange([{id:'video',name:'Guest',kind:'video',state:'uploading',phase:'uploading',progress:5},{id:'photo',name:'Guest',kind:'photo',state:'uploading',phase:'uploading',progress:80}]);
+ assert.match(h.nodes['#queue-items'].innerHTML,/Video · Guest · Mengunggah 5%/);assert.match(h.nodes['#queue-items'].innerHTML,/Foto · Guest · Mengunggah 80%/);assert.match(h.nodes['#queue-summary'].textContent,/2 aktif/);assert.equal(h.nodes['#take-photo'].disabled,false);
+});
 test('camera/background events keep active transfers, while offline cancels them; returning resumes the outbox',async()=>{
  const h=harness();await tick();const paused=[];let resumed=0;h.context.paused=cancel=>paused.push(cancel);h.context.resumed=()=>resumed++;
  h.run('outbox.pause=paused;outbox.resume=async()=>resumed()');
@@ -116,7 +120,7 @@ test('finishing or cancelling native capture resumes uploads even without a visi
  h.nodes['#take-video'].onclick();h.nodes['#native-video'].onchange({target:{files:[]}});
  h.events.focus();await tick();assert.equal(paused,2);assert.equal(resumed,3);
 });
-test('capturing the next photo keeps the same live XHR and publishes both originals exactly once',async()=>{
+test('capturing the next photo keeps its predecessor live while the photo lane uploads both originals',async()=>{
  const h=harness();await tick();const transfers=[],completed=[];let tickets=0;
  const until=async check=>{for(let n=0;n<100;n++){if(await check())return;await tick();}assert.fail('uploads did not settle');};
  h.context.XMLHttpRequest=class{
@@ -130,10 +134,10 @@ test('capturing the next photo keeps the same live XHR and publishes both origin
  h.nodes['#guest-name'].value='Guest';h.context.first=first;h.run('selectFile(first)');await h.nodes['#upload-form'].onsubmit({preventDefault(){}});await until(()=>transfers.length===1);
  transfers[0].upload.onprogress({lengthComputable:true,loaded:6,total:10});h.nodes['#take-photo'].onclick();h.context.document.hidden=true;h.events.visibilitychange();h.events.pagehide();
  h.context.document.hidden=false;h.nodes['#native-photo'].onchange({target:{files:[second]}});h.events.visibilitychange();
- await h.nodes['#upload-form'].onsubmit({preventDefault(){}});assert.equal(transfers.length,1);assert.notEqual(transfers[0].aborted,true);assert.equal((await queue.list())[0].progress,60);
- transfers[0].status=200;transfers[0].onload();await until(()=>transfers.length===2);
- transfers[1].status=200;transfers[1].onload();await until(()=>completed.length===2);
- assert.deepEqual(completed,['remote1','remote2']);assert.equal(await transfers[0].blob.text(),'first original');assert.equal(await transfers[1].blob.text(),'second original');assert.deepEqual(await queue.list(),[]);
+ await h.nodes['#upload-form'].onsubmit({preventDefault(){}});await until(()=>transfers.length===2);assert.notEqual(transfers[0].aborted,true);assert.ok((await queue.list()).some(row=>row.progress===60));
+ transfers[1].status=200;transfers[1].onload();await until(()=>completed.length===1);assert.equal(completed[0],'remote2');
+ transfers[0].status=200;transfers[0].onload();await until(()=>completed.length===2);
+ assert.deepEqual(completed,['remote2','remote1']);assert.equal(await transfers[0].blob.text(),'first original');assert.equal(await transfers[1].blob.text(),'second original');assert.deepEqual(await queue.list(),[]);
 });
 test('gallery uses only thumbnails and never requests full photo bytes for a missing thumbnail',async()=>{
  const h=harness();await tick();h.nodes['#media-type'].value='all';h.run('items=[{id:"a",name:"Guest <img>",mime:"image/jpeg",filter:"film",thumbnail:true},{id:"b",name:"Other",mime:"image/jpeg",filter:"original",thumbnail:false}];next=null;renderGallery()');

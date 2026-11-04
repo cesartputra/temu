@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler
 
 class AsyncQueueTests(unittest.TestCase):
     def setUp(self):
-        self.workers_env=mock.patch.dict(os.environ,{'TEMU_ALBUM_WORKERS':'2'});self.workers_env.start()
+        self.workers_env=mock.patch.dict(os.environ,{'TEMU_ALBUM_PHOTO_WORKERS':'2','TEMU_ALBUM_VIDEO_WORKERS':'1'});self.workers_env.start()
         self.tmp=tempfile.TemporaryDirectory();self.db=fixtures.album_test.server.Database(self.tmp.name);self.a=album.Album(self.db);self.config=self.a.configure({'title':'Test','mode':'live','filter':'original','uploadsOpen':True})
         self.env=mock.patch.dict(os.environ,fixtures.ENV);self.env.start();self.store=fixtures.FakeStore();self.patch=mock.patch.object(album.album_storage,'S3Storage',return_value=self.store);self.patch.start()
     def tearDown(self):self.patch.stop();self.env.stop();self.tmp.cleanup();self.workers_env.stop()
@@ -77,11 +77,11 @@ class AsyncQueueTests(unittest.TestCase):
         self.assertEqual(self.a.public(self.config)['count'],1)
     def test_lost_ticket_response_is_idempotent_and_upload_slots_are_bounded(self):
         t=self.begin();again=self.begin();self.assertEqual(t['id'],again['id']);self.assertEqual(t['token'],again['token'])
-        for n in range(1,12):self.begin(n)
-        with self.assertRaises(album.AlbumError) as error:self.begin(12)
+        for n in range(1,32):self.begin(n)
+        with self.assertRaises(album.AlbumError) as error:self.begin(32)
         self.assertEqual(error.exception.status,429)
-        self.queue(t);self.begin(12)
-        with self.db.connect() as c:self.assertEqual(c.execute('SELECT count(*) FROM album_uploads').fetchone()[0],13)
+        self.queue(t);self.begin(32)
+        with self.db.connect() as c:self.assertEqual(c.execute('SELECT count(*) FROM album_uploads').fetchone()[0],33)
     def test_retry_finds_an_existing_finalization_or_published_item_without_uploading_again(self):
         ticket=self.begin();self.queue(ticket)
         pending=self.begin();self.assertTrue(pending['pending']);self.assertEqual(pending['id'],ticket['id']);self.assertEqual(pending['token'],ticket['token']);self.assertNotIn('url',pending)
@@ -156,11 +156,42 @@ class AsyncQueueTests(unittest.TestCase):
         self.assertTrue(album_jobs.process_next(restarted));self.assertFalse(album_jobs.process_next(restarted))
         self.assertEqual(self.a.public(self.config)['count'],1)
     def test_worker_count_is_configurable_and_rejects_unbounded_values(self):
-        with mock.patch.dict(os.environ,{},clear=True):self.assertEqual(album_jobs.worker_count(),2)
-        for value in ('1','2','3','4'):
-            with mock.patch.dict(os.environ,{'TEMU_ALBUM_WORKERS':value}):self.assertEqual(album_jobs.worker_count(),int(value))
-        for value in ('0','5','-1','100','2.0','', 'two'):
-            with mock.patch.dict(os.environ,{'TEMU_ALBUM_WORKERS':value}),self.assertRaisesRegex(ValueError,'TEMU_ALBUM_WORKERS'):album_jobs.worker_count()
+        with mock.patch.dict(os.environ,{},clear=True):self.assertEqual(album_jobs.worker_count(),6);self.assertEqual(album_jobs.worker_count('video'),1)
+        for value in ('1','2','6','8'):
+            with mock.patch.dict(os.environ,{'TEMU_ALBUM_WORKERS':value},clear=True):self.assertEqual(album_jobs.worker_count(),int(value))
+        with mock.patch.dict(os.environ,{'TEMU_ALBUM_WORKERS':'2','TEMU_ALBUM_PHOTO_WORKERS':'6','TEMU_ALBUM_VIDEO_WORKERS':'2'}):
+            self.assertEqual(album_jobs.worker_count(),6);self.assertEqual(album_jobs.worker_count('video'),2)
+        for name,maximum in (('TEMU_ALBUM_PHOTO_WORKERS',8),('TEMU_ALBUM_VIDEO_WORKERS',2)):
+            for value in ('0',str(maximum+1),'-1','100','2.0','', 'two'):
+                with mock.patch.dict(os.environ,{name:value}),self.assertRaisesRegex(ValueError,name):album_jobs.worker_count('video' if name.endswith('VIDEO_WORKERS') else 'photo')
+
+    def test_full_video_admission_keeps_room_for_photo_tickets(self):
+        video=b'\x00\x00\x00\x18ftypisom'+b'clip'*24
+        tickets=[self.begin(n,'video/mp4',video) for n in range(8)]
+        with self.assertRaises(album.AlbumError) as error:self.begin(8,'video/mp4',video)
+        self.assertEqual(error.exception.status,429);self.begin(100)
+        for ticket in tickets:self.queue(ticket,video,'video/mp4')
+        more=[self.begin(n,'video/mp4',video) for n in range(8,16)]
+        for ticket in more:self.queue(ticket,video,'video/mp4')
+        with self.assertRaises(album.AlbumError) as error:self.begin(16,'video/mp4',video)
+        self.assertEqual(error.exception.status,429);self.begin(101)
+
+    def test_busy_video_finalizer_does_not_block_photo_publication(self):
+        video=b'\x00\x00\x00\x18ftypisom'+b'clip'*24
+        ticket=self.begin(0,'video/mp4',video);photo=self.begin(1)
+        self.queue(ticket,video,'video/mp4');self.queue(photo)
+        entered=threading.Event();release=threading.Event();copy=self.store.copy
+        def slow(source,*args):
+            if source.endswith('.mp4'):entered.set();release.wait(3)
+            copy(source,*args)
+        with mock.patch.object(self.store,'copy',side_effect=slow):
+            thread=threading.Thread(target=album_jobs.process_next,args=(self.a,'video'));thread.start()
+            try:
+                self.assertTrue(entered.wait(2));self.assertFalse(album_jobs.process_next(self.a,'video'))
+                self.assertTrue(album_jobs.process_next(self.a,'photo'));self.assertTrue(album_jobs.response(self.a,photo['id'])['ok'])
+                self.assertTrue(album_jobs.response(self.a,ticket['id'])['pending'])
+            finally:release.set();thread.join(3)
+        self.assertTrue(album_jobs.response(self.a,ticket['id'])['ok'])
     def test_two_jobs_overlap_with_bounded_slots_and_metadata_stays_responsive(self):
         tickets=[self.begin(n) for n in range(3)]
         for ticket in tickets:self.queue(ticket)
@@ -206,13 +237,14 @@ class AsyncQueueTests(unittest.TestCase):
         self.assertTrue(album_jobs.process_next(restarted));self.assertEqual(self.a.public(self.config)['count'],1)
     def test_start_workers_creates_configured_pool_once_and_stops_cleanly(self):
         for count in (1,2,4):
-            with self.subTest(count=count),mock.patch.dict(os.environ,{'TEMU_ALBUM_WORKERS':str(count)}):
+            with self.subTest(count=count),mock.patch.dict(os.environ,{'TEMU_ALBUM_PHOTO_WORKERS':str(count),'TEMU_ALBUM_VIDEO_WORKERS':'2'}):
                 a=album.Album(self.db);stop=threading.Event()
                 workers=album_jobs.start_workers(a,stop)
                 try:
                     self.assertIs(album_jobs.start_workers(a,stop),workers)
-                    self.assertEqual(len(workers),count+1)
-                    self.assertEqual(sum(t.name.startswith('temu-album-finalize-') for t in workers),count)
+                    self.assertEqual(len(workers),count+3)
+                    self.assertEqual(sum(t.name.startswith('temu-album-finalize-photo-') for t in workers),count)
+                    self.assertEqual(sum(t.name.startswith('temu-album-finalize-video-') for t in workers),2)
                     self.assertTrue(all(t.is_alive() for t in workers))
                 finally:
                     stop.set()
@@ -253,8 +285,61 @@ class AsyncQueueTests(unittest.TestCase):
             finally:
                 done.set()
                 for runner in runners:runner.join(3)
-        self.assertEqual(worker_errors,[]);self.assertEqual(len(set(ids)),180);self.assertEqual(peak['copy'],2);self.assertLessEqual(peak['active'],12);self.assertLessEqual(peak['pending'],24)
+        self.assertEqual(worker_errors,[]);self.assertEqual(len(set(ids)),180);self.assertGreater(peak['copy'],0);self.assertLessEqual(peak['copy'],2);self.assertLessEqual(peak['active'],32);self.assertLessEqual(peak['pending'],64)
         print('180-client simulation:',peak,'; 180 distinct published objects')
+
+    def test_300_multipart_clients_wait_for_original_publication_with_bounded_work(self):
+        with mock.patch.dict(os.environ,{'TEMU_ALBUM_PHOTO_WORKERS':'6','TEMU_ALBUM_VIDEO_WORKERS':'1'}):self.a=album.Album(self.db)
+        lock=threading.Lock();peak={'photo':0,'video':0,'pending':0,'active':0};current={'photo':0,'video':0};done=threading.Event();worker_errors=[]
+        finish=self.store.finish_multipart;started=time.monotonic()
+        def delayed_finish(*args):
+            lane='video' if args[0].endswith('.mp4') else 'photo'
+            with lock:current[lane]+=1;peak[lane]=max(peak[lane],current[lane])
+            try:time.sleep(.01);finish(*args)
+            finally:
+                with lock:current[lane]-=1
+        def worker(lane):
+            try:
+                while not done.is_set():
+                    if not album_jobs.process_next(self.a,lane):done.wait(.005)
+            except Exception as error:worker_errors.append(error)
+        def guest(n):
+            mime='video/mp4' if n%2 else 'image/jpeg';data=b'\x00\x00\x00\x18ftypisom'+b'clip'*24 if n%2 else fixtures.PHOTO
+            body={'requestId':format(n,'032x'),'name':'Guest '+str(n),'mime':mime,'size':len(data),'filter':'original','multipart':True}
+            deadline=time.monotonic()+60;attempt=0
+            while True:
+                try:ticket=self.a.begin_upload(self.handler(body),self.config);break
+                except album.AlbumError as error:
+                    if error.status!=429 or time.monotonic()>deadline:raise
+                    time.sleep(min(.25,.02*2**min(attempt,4))+(n%7)*.001);attempt+=1
+            if n%17==0:self.assertEqual(self.a.begin_upload(self.handler(body),self.config)['id'],ticket['id'])
+            with self.db.connect() as c:
+                identifier=c.execute('SELECT upload_id FROM album_multipart WHERE id=?',(ticket['id'],)).fetchone()[0]
+                pending=c.execute('SELECT count(*) FROM album_uploads WHERE completed=0').fetchone()[0]
+                active=c.execute('SELECT count(*) FROM album_uploads u LEFT JOIN album_jobs j ON u.id=j.id WHERE u.completed=0 AND j.id IS NULL').fetchone()[0]
+            with lock:peak['pending']=max(peak['pending'],pending);peak['active']=max(peak['active'],active)
+            self.store.multipart[identifier][2]=data
+            self.a.complete_upload(self.handler({'token':ticket['token']}),ticket['id'],self.config)
+            if n%17==0:self.a.complete_upload(self.handler({'token':ticket['token']}),ticket['id'],self.config)
+            while self.a.upload_status(self.handler({'token':ticket['token']}),ticket['id']).get('pending'):
+                if time.monotonic()>deadline:raise AssertionError('Original publication did not finish.')
+                time.sleep(.02+(n%7)*.001)
+            key=self.store.key('media',ticket['id'],'.mp4' if n%2 else '.jpg')
+            self.assertEqual(self.store.files[key],(data,mime));return ticket['id']
+        with mock.patch.object(self.store,'finish_multipart',side_effect=delayed_finish),mock.patch.object(self.store,'copy',side_effect=AssertionError('Multipart originals must not be copied.')):
+            workers=[threading.Thread(target=worker,args=(lane,)) for lane,count in (('photo',6),('video',1)) for _ in range(count)]
+            for thread in workers:thread.start()
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=300) as pool:ids=list(pool.map(guest,range(300)))
+            finally:
+                done.set()
+                for thread in workers:thread.join(3)
+        self.assertEqual(worker_errors,[]);self.assertTrue(all(not thread.is_alive() for thread in workers))
+        self.assertEqual(len(set(ids)),300);self.assertEqual(self.a.public(self.config)['count'],300)
+        self.assertEqual(len(self.store.files),300);self.assertEqual(self.store.multipart,{})
+        self.assertGreater(peak['photo'],1);self.assertLessEqual(peak['photo'],6);self.assertEqual(peak['video'],1)
+        self.assertLessEqual(peak['active'],32);self.assertLessEqual(peak['pending'],64)
+        print('300-client multipart simulation:',peak,'; 300 original publications; elapsed:',round(time.monotonic()-started,3),'seconds; fake storage, no HTTP/network')
 
 class BoundedServerTests(unittest.TestCase):
     def test_socket_setup_failure_does_not_leak_the_only_http_slot(self):
