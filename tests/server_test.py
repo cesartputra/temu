@@ -19,6 +19,19 @@ class ServerTests(unittest.TestCase):
    with self.subTest(value=value):
     bad=copy.deepcopy(result['state']);bad['guests'][0]['invitationMode']=value
     self.assertRaises(ValueError,server.validate,bad)
+ def test_bulk_public_preserves_existing_links_and_private_device_owners(self):
+  second={**self.initial['guests'][0],'id':'g2','code':'qr2','name':'Tamu Kedua'}
+  add={'id':str(uuid.uuid4()),'event':'wedding','kind':'change','meta':None,'changes':[{'id':'g2','before':None,'after':second}],'logs':[]}
+  state=self.db.sync({'event':'wedding','operations':[add]})['state']
+  links={g['id']:self.db.guest_link('wedding',g['id']) for g in state['guests']}
+  for guest,link in links.items():self.db.bind_invitation_device(guest,link['key'],'A'*43)
+  with self.db.connect() as c:owners=c.execute('SELECT * FROM invitation_devices ORDER BY guest').fetchall()
+  bulk={'id':str(uuid.uuid4()),'event':'wedding','kind':'change','meta':None,'changes':[{'id':g['id'],'before':g,'after':{**g,'invitationMode':'public'}} for g in state['guests']],'logs':[]}
+  result=self.db.sync({'event':'wedding','operations':[bulk]});self.assertTrue(result['results'][0]['ok'])
+  for guest,link in links.items():
+   self.assertEqual(self.db.guest_link('wedding',guest),link)
+   self.assertEqual(self.db.bind_invitation_device(guest,link['key'],'B'*43)[0]['guest']['invitationMode'],'public')
+  with self.db.connect() as c:self.assertEqual(c.execute('SELECT * FROM invitation_devices ORDER BY guest').fetchall(),owners)
  def test_removing_guests_and_events_cleans_up_public_browser_grants(self):
   for cleanup in ('guest','event','clear'):
    with self.subTest(cleanup=cleanup),tempfile.TemporaryDirectory() as directory:

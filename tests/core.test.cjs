@@ -139,6 +139,64 @@ test('tamu yang dihapus saat sinkronisasi tidak diklaim berhasil menjadi Private
  assert.match(vm.runInContext("document.querySelector('#invitation-access-status').textContent",c),/belum diterapkan|tidak aktif/);
 });
 
+test('Public massal meminta konfirmasi dan mengubah semua undangan aktif tanpa mengikuti filter',async()=>{
+ const c=await invitationAccessContext();
+ await vm.runInContext(`(async()=>{await commit(d=>d.guests.push(
+  {id:'private',code:'qr-private',name:'Private',group:'Keluarga',quota:3,arrived:1,active:true,invitationMode:'private',akad:'y',vip:'y'},
+  {id:'public',code:'qr-public',name:'Public',group:'Teman',quota:1,arrived:0,active:true,invitationMode:'public'},
+  {id:'inactive',code:'qr-inactive',name:'Nonaktif',group:'',quota:1,arrived:0,active:false},
+  {id:'deleted',code:'qr-deleted',name:'Tamu dihapus',group:'',quota:1,arrived:0,active:false,deleted:true}
+  ));document.querySelector('#search').value='tidak cocok';document.querySelector('#guest-group-filter').value='g:Teman';})()`,c);
+ const before=JSON.parse(vm.runInContext('JSON.stringify(db)',c));
+ await vm.runInContext("document.querySelector('#bulk-public-invitations').onclick()",c);
+ assert.match(vm.runInContext("document.querySelector('#modal-body').innerHTML",c),/2 undangan/);
+ assert.deepEqual(JSON.parse(vm.runInContext('JSON.stringify(db)',c)),before);
+ vm.runInContext("document.querySelector('#bulk-public-cancel').onclick()",c);
+ assert.deepEqual(JSON.parse(vm.runInContext('JSON.stringify(db)',c)),before);
+ await vm.runInContext("document.querySelector('#bulk-public-invitations').onclick()",c);
+ await vm.runInContext("document.querySelector('#bulk-public-confirm').onclick()",c);
+ before.guests[0].invitationMode='public';before.guests[1].invitationMode='public';
+ assert.deepEqual(JSON.parse(vm.runInContext('JSON.stringify(db)',c)),before);
+ assert.equal((await c.TemuStore.read()).outbox.length,0);
+ assert.match(vm.runInContext("document.querySelector('#toast').textContent",c),/2 undangan.*Public/);
+});
+test('Public massal tidak mengklaim berhasil sebelum sinkron dan percobaan ulang tidak menggandakan operasi',async()=>{
+ const c=await invitationAccessContext();await vm.runInContext("document.querySelector('#bulk-public-invitations').onclick()",c);
+ vm.runInContext('accessSyncUnavailable=true',c);
+ await vm.runInContext("document.querySelector('#bulk-public-confirm').onclick()",c);
+ assert.equal((await c.TemuStore.read()).outbox.length,1);
+ assert.match(vm.runInContext("document.querySelector('#bulk-public-status').textContent",c),/belum diterapkan/);
+ assert.equal(vm.runInContext("document.querySelector('#modal').open",c),true);
+ await vm.runInContext("document.querySelector('#bulk-public-confirm').onclick()",c);
+ assert.equal((await c.TemuStore.read()).outbox.length,1);
+ vm.runInContext('accessSyncUnavailable=false',c);await vm.runInContext("document.querySelector('#bulk-public-confirm').onclick()",c);
+ assert.equal((await c.TemuStore.read()).outbox.length,0);
+ assert.match(vm.runInContext("document.querySelector('#toast').textContent",c),/1 undangan.*Public/);
+});
+test('Public massal melindungi akses pengelola, acara yang berganti, dan daftar yang sudah Public',async()=>{
+ const c=await invitationAccessContext();vm.runInContext('admin=async()=>false',c);
+ await vm.runInContext("document.querySelector('#bulk-public-invitations').onclick()",c);
+ assert.notEqual(vm.runInContext("document.querySelector('#modal').open",c),true);
+ vm.runInContext('admin=async()=>true',c);await vm.runInContext("document.querySelector('#bulk-public-invitations').onclick()",c);
+ await c.TemuStore.transaction(r=>{r.state.event.id='other-event';return r;});
+ await vm.runInContext("document.querySelector('#bulk-public-confirm').onclick()",c);
+ assert.equal((await c.TemuStore.read()).state.guests[0].invitationMode,undefined);
+ assert.match(vm.runInContext("document.querySelector('#bulk-public-status').textContent",c),/Acara.*berubah/);
+ const ready=await invitationAccessContext();await vm.runInContext("(async()=>{await commit(d=>d.guests[0].invitationMode='public');await syncNow();})()",ready);
+ const backups=(await ready.TemuStore.read()).backups.length;
+ await vm.runInContext("document.querySelector('#bulk-public-invitations').onclick()",ready);
+ assert.match(vm.runInContext("document.querySelector('#toast').textContent",ready),/sudah Public/);
+ assert.equal((await ready.TemuStore.read()).outbox.length,0);assert.equal((await ready.TemuStore.read()).backups.length,backups);
+});
+test('Public massal tidak membuka kembali konfirmasi yang ditutup saat sinkronisasi berjalan',async()=>{
+ const c=await invitationAccessContext();vm.runInContext('let finishBulkSync;syncNow=()=>new Promise(resolve=>finishBulkSync=resolve)',c);
+ const opening=vm.runInContext("document.querySelector('#bulk-public-invitations').onclick()",c);await new Promise(setImmediate);
+ assert.equal(vm.runInContext("document.querySelector('#modal').open",c),true);
+ vm.runInContext("document.querySelector('#modal').close();finishBulkSync()",c);await opening;
+ assert.equal(vm.runInContext("document.querySelector('#modal').open",c),false);
+ assert.equal((await c.TemuStore.read()).state.guests[0].invitationMode,undefined);
+});
+
 test('RSVP WhatsApp column updates immediately after marking sent without reloading RSVP',async()=>{
  const c=await context();vm.runInContext(fs.readFileSync(path.join(__dirname,'../dist/guest-admin.js'),'utf8'),c);
  const cell={dataset:{rsvpWhatsapp:'wa'}};c.document.querySelectorAll=selector=>selector==='[data-rsvp-whatsapp]'?[cell]:[];

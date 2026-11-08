@@ -38,6 +38,38 @@ async function showInvitationAccessChange(g){
   finally{button.disabled=false;}
  };
 }
+async function showBulkPublicInvitations(){
+ if(!await admin())return;
+ modal('Jadikan semua undangan Public?','<p id="bulk-public-loading" role="status">Memeriksa sinkronisasi undangan…</p>');
+ const loading=$('#bulk-public-loading');
+ try{
+  await syncNow();const record=await TemuStore.read();
+  if(!$('#modal').open||$('#bulk-public-loading')!==loading)return;
+  if(!record.config.enabled||!record.config.token||record.outbox.length||record.conflicts.some(c=>!c.resolved))throw Error('Hubungkan dan sinkronkan server serta selesaikan konflik sebelum mengubah semua undangan.');
+  const event=record.state.event.id,guests=record.state.guests.filter(g=>g.active&&!g.deleted&&g.invitationMode!=='public'),ids=new Set(guests.map(g=>g.id));
+  if(!ids.size){$('#modal').close();return toast('Semua undangan aktif sudah Public, atau belum ada undangan aktif.');}
+  modal('Jadikan semua undangan Public?',`<p><strong>${ids.size} undangan aktif</strong> akan diubah menjadi Public, termasuk undangan di luar filter daftar. Undangan nonaktif atau yang dihapus dilewati.</p><p>Siapa pun yang memiliki tautan dapat membuka undangan dari browser mana saja, serta mengisi RSVP dan ucapan atas nama tamu tersebut.</p><p>URL yang sudah dibagikan tetap sama. Mode akses tiap tamu tetap dapat diubah kembali satu per satu.</p><div class="actions"><button id="bulk-public-confirm" type="button" class="primary">Ya, jadikan semua Public</button><button id="bulk-public-cancel" type="button">Batal</button></div><p id="bulk-public-status" role="status"></p>`);
+  const button=$('#bulk-public-confirm'),status=$('#bulk-public-status');$('#bulk-public-cancel').onclick=()=>$('#modal').close();
+  button.onclick=async()=>{
+   if(button.disabled)return;button.disabled=true;status.textContent='Menyimpan dan menyinkronkan perubahan…';
+   try{
+    if(!await admin())return;
+    await commit(state=>{
+     if(state.event.id!==event)throw Error('Acara telah berubah. Buka kembali konfirmasi.');
+     const targets=state.guests.filter(g=>ids.has(g.id)&&g.active&&!g.deleted);
+     if(targets.length!==ids.size)throw Error('Daftar tamu berubah. Buka kembali konfirmasi.');
+     for(const guest of targets)guest.invitationMode='public';
+    });
+    await syncNow();const saved=await TemuStore.read();
+    if(saved.state.event.id!==event||!saved.config.enabled||!saved.config.token||saved.outbox.length||saved.conflicts.some(c=>!c.resolved)||saved.state.guests.filter(g=>ids.has(g.id)&&g.active&&!g.deleted&&g.invitationMode==='public').length!==ids.size)throw Error('Perubahan belum diterapkan di server. Sinkronkan dan periksa konflik, lalu coba lagi.');
+    toast(ids.size+' undangan berhasil menjadi Public. URL undangan tetap sama.');
+    if($('#modal').open&&$('#bulk-public-confirm')===button)$('#modal').close();
+   }catch(error){if($('#modal').open&&$('#bulk-public-confirm')===button)status.textContent=error.message;}
+   finally{button.disabled=false;}
+  };
+ }catch(error){if($('#modal').open&&$('#bulk-public-loading')===loading)loading.textContent=error.message;}
+}
+$('#bulk-public-invitations').onclick=showBulkPublicInvitations;
 function renderRsvpWhatsApp(){
  const guests=new Map(db.guests.filter(g=>!g.deleted).map(g=>[g.id,g]));
  document.querySelectorAll('[data-rsvp-whatsapp]').forEach(cell=>{
